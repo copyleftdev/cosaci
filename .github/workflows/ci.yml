@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  # Hegel uses a database of past failures keyed under .hegel/. CI
+  # builds start from a clean slate every run; that's the right shape
+  # for catching regressions, so we deliberately do NOT cache .hegel/.
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+          rustup component add rustfmt clippy
+
+      - name: Cache Cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Match the cache key on Cargo.lock so dep changes invalidate
+          # cleanly. Workspace splits don't change the cache shape.
+          shared-key: "ubuntu-stable"
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # Clippy gate. Initially -D warnings only; tighten to
+      # `-D clippy::pedantic` once v0.2 issue #9 lands.
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --all-features
+
+      - name: cargo bench --no-run (compile only)
+        run: cargo bench --no-run
+
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --workspace
+
+  smoke:
+    name: Smoke test (networked demo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-stable"
+
+      - name: Build coordinator + agent + demo_networked
+        run: cargo build --bin coordinator --bin agent --bin demo_networked
+
+      # End-to-end smoke test: launches the networked demo, ensures it
+      # produces the expected outcome line within 30s, and exits 0.
+      - name: Run networked demo
+        run: |
+          set -euo pipefail
+          OUT=$(timeout 30 cargo run --quiet --bin demo_networked 2>&1)
+          echo "$OUT"
+          echo "$OUT" | grep -q "quorum outcome Pass"
+          echo "$OUT" | grep -q "Inclusion proof verification: ok\|anchored at position"
+          echo "$OUT" | grep -q "Coordinator exit: 0"
+
+  # Audit gate. Currently advisory — issue #10 lands deny.toml; flip
+  # `continue-on-error` to false at that point.
+  deny:
+    name: cargo deny check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-stable"
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+
+      - name: Run cargo deny
+        run: cargo deny check
