@@ -17,6 +17,7 @@ pub mod gossip;
 pub mod lease;
 pub mod merkle_log;
 pub mod partition;
+pub mod proto;
 pub mod quorum;
 pub mod rate_limit;
 pub mod registry;
