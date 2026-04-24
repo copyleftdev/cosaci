@@ -47,8 +47,8 @@ fn draw_runner(tc: &TestCase) -> u64 {
 struct PartitionTest {
     clock: TestClock,
     subject: Cluster<TestClock>,
-    // Model: which jobs currently have an active lease and when they expire.
-    active_by_job: HashMap<u64, (LeaseId, u64)>,
+    // Model: per-(job, runner) active leases and expiry.
+    active_by_pair: HashMap<(u64, u64), (LeaseId, u64)>,
     // Set of all lease ids ever issued by the subject (uniqueness check).
     issued_ids: HashSet<LeaseId>,
 }
@@ -56,7 +56,7 @@ struct PartitionTest {
 impl PartitionTest {
     fn sync_model(&mut self) {
         let now = self.clock.now();
-        self.active_by_job
+        self.active_by_pair
             .retain(|_, (_, expires_at)| now < *expires_at);
     }
 }
@@ -74,7 +74,7 @@ impl PartitionTest {
 
         let majority = self.subject.majority();
         let is_minority_op = majority.is_some_and(|m| m != side);
-        let model_says_free = !self.active_by_job.contains_key(&job);
+        let model_says_free = !self.active_by_pair.contains_key(&(job, runner));
 
         match self.subject.acquire(side, job, runner) {
             Ok(lease_id) => {
@@ -84,8 +84,8 @@ impl PartitionTest {
                 );
                 assert!(
                     model_says_free,
-                    "cluster accepted acquire for already-leased job {}",
-                    job
+                    "cluster accepted acquire for already-leased ({}, {})",
+                    job, runner
                 );
                 assert!(
                     !self.issued_ids.contains(&lease_id),
@@ -93,8 +93,8 @@ impl PartitionTest {
                     lease_id
                 );
                 self.issued_ids.insert(lease_id);
-                self.active_by_job
-                    .insert(job, (lease_id, now.saturating_add(TTL_NS)));
+                self.active_by_pair
+                    .insert((job, runner), (lease_id, now.saturating_add(TTL_NS)));
             }
             Err(ClusterError::NotAuthoritative) => {
                 assert!(
@@ -105,8 +105,8 @@ impl PartitionTest {
             Err(ClusterError::AlreadyLeased) => {
                 assert!(
                     !model_says_free,
-                    "cluster rejected free job {} as AlreadyLeased",
-                    job
+                    "cluster rejected free ({}, {}) as AlreadyLeased",
+                    job, runner
                 );
                 assert!(
                     !is_minority_op,
@@ -136,15 +136,13 @@ impl PartitionTest {
                     !is_minority_op,
                     "cluster accepted minority-side complete during partition"
                 );
-                // If this lease_id was active for some job in the model,
-                // remove it.
-                let job_to_clear: Option<u64> = self
-                    .active_by_job
+                let pair_to_clear: Option<(u64, u64)> = self
+                    .active_by_pair
                     .iter()
                     .find(|(_, (lid, _))| *lid == lease_id)
-                    .map(|(j, _)| *j);
-                if let Some(j) = job_to_clear {
-                    self.active_by_job.remove(&j);
+                    .map(|(p, _)| *p);
+                if let Some(p) = pair_to_clear {
+                    self.active_by_pair.remove(&p);
                 }
             }
             Err(ClusterError::NotAuthoritative) => {
@@ -190,17 +188,17 @@ impl PartitionTest {
         self.sync_model();
         assert_eq!(
             self.subject.count_active(),
-            self.active_by_job.len(),
+            self.active_by_pair.len(),
             "active-lease count diverged: subject={}, model={}",
             self.subject.count_active(),
-            self.active_by_job.len()
+            self.active_by_pair.len()
         );
-        for (&job, &(expected_lease, _)) in &self.active_by_job.clone() {
+        for (&(job, runner), &(expected_lease, _)) in &self.active_by_pair.clone() {
             assert_eq!(
-                self.subject.active_lease_for(job),
+                self.subject.active_lease_for(job, runner),
                 Some(expected_lease),
-                "active lease diverged for job {}",
-                job
+                "active lease diverged for ({}, {})",
+                job, runner
             );
         }
     }
@@ -213,7 +211,7 @@ fn cluster_gating_holds_under_partitions(tc: TestCase) {
     let test = PartitionTest {
         clock,
         subject,
-        active_by_job: HashMap::new(),
+        active_by_pair: HashMap::new(),
         issued_ids: HashSet::new(),
     };
     hegel::stateful::run(test, tc);

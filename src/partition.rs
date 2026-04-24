@@ -120,13 +120,22 @@ impl<C: Clock> Cluster<C> {
         self.partition.is_some()
     }
 
-    /// Active lease for a job (passed through from `LeaseManager`).
-    pub fn active_lease_for(&mut self, job: JobId) -> Option<LeaseId> {
-        self.manager.active_lease_for(job)
+    /// Active lease for the `(job, runner)` pair (passed through).
+    pub fn active_lease_for(
+        &mut self,
+        job: JobId,
+        runner: RunnerId,
+    ) -> Option<LeaseId> {
+        self.manager.active_lease_for(job, runner)
     }
 
     /// Count of active leases across the cluster.
     pub fn count_active(&mut self) -> usize {
         self.manager.count_active()
+    }
+
+    /// All currently-active `(job, runner)` pairs.
+    pub fn active_pairs(&mut self) -> Vec<(JobId, RunnerId)> {
+        self.manager.active_pairs()
     }
 }

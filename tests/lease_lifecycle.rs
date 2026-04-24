@@ -52,9 +52,10 @@ fn draw_runner(tc: &TestCase) -> u64 {
 struct LeaseTest {
     clock: TestClock,
     manager: LeaseManager<TestClock>,
-    // Model: active_by_job maps each job with a live lease to its id +
-    // expiry time. `sync_model` prunes expired entries based on the clock.
-    active_by_job: HashMap<u64, (LeaseId, u64)>,
+    // Model: active_by_pair maps each (job, runner) pair with a live
+    // lease to its id + expiry time. `sync_model` prunes expired entries
+    // based on the clock.
+    active_by_pair: HashMap<(u64, u64), (LeaseId, u64)>,
     // Every lease id ever issued by the manager; used to assert uniqueness.
     issued_ids: HashSet<LeaseId>,
 }
@@ -62,7 +63,7 @@ struct LeaseTest {
 impl LeaseTest {
     fn sync_model(&mut self) {
         let now = self.clock.now();
-        self.active_by_job
+        self.active_by_pair
             .retain(|_, (_lease_id, expires_at)| now < *expires_at);
     }
 }
@@ -77,13 +78,13 @@ impl LeaseTest {
         let runner = draw_runner(&tc);
         let now = self.clock.now();
 
-        let predicted_success = !self.active_by_job.contains_key(&job);
+        let predicted_success = !self.active_by_pair.contains_key(&(job, runner));
         match self.manager.acquire(job, runner) {
             Ok(lease_id) => {
                 assert!(
                     predicted_success,
-                    "manager acquired job {} but model said it was leased",
-                    job
+                    "manager acquired ({}, {}) but model said it was leased",
+                    job, runner
                 );
                 assert!(
                     !self.issued_ids.contains(&lease_id),
@@ -91,14 +92,14 @@ impl LeaseTest {
                     lease_id
                 );
                 self.issued_ids.insert(lease_id);
-                self.active_by_job
-                    .insert(job, (lease_id, now.saturating_add(TTL_NS)));
+                self.active_by_pair
+                    .insert((job, runner), (lease_id, now.saturating_add(TTL_NS)));
             }
             Err(LeaseError::AlreadyLeased) => {
                 assert!(
                     !predicted_success,
-                    "manager rejected job {} but model said it was free",
-                    job
+                    "manager rejected ({}, {}) but model said it was free",
+                    job, runner
                 );
             }
         }
@@ -113,14 +114,13 @@ impl LeaseTest {
                 .min_value(0)
                 .max_value(200),
         );
-        // If this lease_id is the current active lease for some job, remove.
-        let job_to_clear: Option<u64> = self
-            .active_by_job
+        let pair_to_clear: Option<(u64, u64)> = self
+            .active_by_pair
             .iter()
             .find(|(_, (lid, _))| *lid == lease_id)
-            .map(|(j, _)| *j);
-        if let Some(j) = job_to_clear {
-            self.active_by_job.remove(&j);
+            .map(|(p, _)| *p);
+        if let Some(p) = pair_to_clear {
+            self.active_by_pair.remove(&p);
         }
         self.manager.complete(lease_id);
     }
@@ -134,13 +134,13 @@ impl LeaseTest {
                 .min_value(0)
                 .max_value(200),
         );
-        let job_to_clear: Option<u64> = self
-            .active_by_job
+        let pair_to_clear: Option<(u64, u64)> = self
+            .active_by_pair
             .iter()
             .find(|(_, (lid, _))| *lid == lease_id)
-            .map(|(j, _)| *j);
-        if let Some(j) = job_to_clear {
-            self.active_by_job.remove(&j);
+            .map(|(p, _)| *p);
+        if let Some(p) = pair_to_clear {
+            self.active_by_pair.remove(&p);
         }
         self.manager.complete(lease_id);
         self.manager.complete(lease_id);
@@ -158,30 +158,31 @@ impl LeaseTest {
         self.sync_model();
     }
 
-    // Structural invariant: model and subject agree on per-job active
+    // Structural invariant: model and subject agree on per-pair active
     // leases, total active count, and uniqueness of lease ids.
     #[invariant]
     fn model_matches_manager(&mut self, _: TestCase) {
         self.sync_model();
         assert_eq!(
             self.manager.count_active(),
-            self.active_by_job.len(),
+            self.active_by_pair.len(),
             "active-lease count diverged: manager={}, model={}",
             self.manager.count_active(),
-            self.active_by_job.len()
+            self.active_by_pair.len()
         );
-        for (job, (expected_lease, _expires_at)) in self.active_by_job.clone() {
+        for ((job, runner), (expected_lease, _expires_at)) in self.active_by_pair.clone() {
             assert_eq!(
-                self.manager.active_lease_for(job),
+                self.manager.active_lease_for(job, runner),
                 Some(expected_lease),
-                "active lease for job {} diverged",
-                job
+                "active lease for ({}, {}) diverged",
+                job, runner
             );
             assert!(
                 self.manager.is_active(expected_lease),
-                "lease {} (job {}) not reported active by manager",
+                "lease {} ({}, {}) not reported active by manager",
                 expected_lease,
-                job
+                job,
+                runner
             );
             assert_eq!(
                 self.manager.state_of(expected_lease),
@@ -193,7 +194,7 @@ impl LeaseTest {
         // Spot-check: issued ids that are not currently active in model should
         // report a non-Active state in the manager.
         let currently_active: HashSet<LeaseId> =
-            self.active_by_job.values().map(|(lid, _)| *lid).collect();
+            self.active_by_pair.values().map(|(lid, _)| *lid).collect();
         for &lid in &self.issued_ids.clone() {
             if !currently_active.contains(&lid) {
                 let state = self.manager.state_of(lid);
@@ -215,7 +216,7 @@ fn lease_manager_matches_model(tc: TestCase) {
     let test = LeaseTest {
         clock,
         manager,
-        active_by_job: HashMap::new(),
+        active_by_pair: HashMap::new(),
         issued_ids: HashSet::new(),
     };
     hegel::stateful::run(test, tc);

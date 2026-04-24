@@ -118,27 +118,17 @@ impl SplitBrainTest {
         // catch. A stronger invariant (lock-step during Connected after
         // prior writes) requires modeling majority state replay on heal;
         // deferred.
-        let total_active_across_jobs: usize =
-            (0..JOB_POOL).map(|j| self.cluster.global_active_count(j)).sum();
-        // This always holds structurally (each replica enforces its own
-        // uniqueness) — it's a sanity check that the cluster composes
-        // the two LeaseManagers correctly.
+        let total_active_across_jobs: usize = (0..JOB_POOL)
+            .map(|j| self.cluster.global_active_count_for_job(j))
+            .sum();
+        // Across both replicas, total leases are bounded by
+        // 2 (replicas) * JOB_POOL (jobs) * RUNNER_POOL (runners).
         assert!(
-            total_active_across_jobs <= (JOB_POOL as usize) * 2,
+            total_active_across_jobs
+                <= 2 * (JOB_POOL as usize) * (RUNNER_POOL as usize),
             "impossibly many active leases: {}",
             total_active_across_jobs
         );
-    }
-
-    // Per-side uniqueness: each replica individually maintains "at most
-    // one active lease per job" — inherited from `lease-lifecycle`.
-    #[invariant]
-    fn per_side_uniqueness(&mut self, _: TestCase) {
-        for j in 0..JOB_POOL {
-            // side_has_active is already 0-or-1 by construction
-            assert!(self.cluster.side_has_active(Side::A, j) || true);
-            assert!(self.cluster.side_has_active(Side::B, j) || true);
-        }
     }
 }
 
@@ -163,8 +153,8 @@ fn connected_acquire_propagates(tc: hegel::TestCase) {
     let runner = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
 
     assert!(cluster.acquire(Side::A, job, runner).is_ok());
-    assert!(cluster.side_has_active(Side::A, job));
-    assert!(cluster.side_has_active(Side::B, job));
+    assert!(cluster.side_has_active(Side::A, job, runner));
+    assert!(cluster.side_has_active(Side::B, job, runner));
 }
 
 /// Partitioned: an acquire on A is NOT visible on B.
@@ -177,12 +167,13 @@ fn partitioned_acquire_does_not_propagate(tc: hegel::TestCase) {
 
     cluster.partition(Side::A);
     assert!(cluster.acquire(Side::A, job, runner).is_ok());
-    assert!(cluster.side_has_active(Side::A, job));
-    assert!(!cluster.side_has_active(Side::B, job));
+    assert!(cluster.side_has_active(Side::A, job, runner));
+    assert!(!cluster.side_has_active(Side::B, job, runner));
 }
 
-/// Split brain during partition: both sides acquire the same job
-/// independently; global count = 2.
+/// Split brain during partition: both sides acquire the same job for
+/// different runners; per-pair counts on each side are 1, but for `job`
+/// across the whole cluster the active count is 2 (split brain).
 #[hegel::test]
 fn partition_permits_split_brain(tc: hegel::TestCase) {
     let clock = TestClock::new();
@@ -190,11 +181,14 @@ fn partition_permits_split_brain(tc: hegel::TestCase) {
     let job = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
     let runner_a = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
     let runner_b = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
+    if runner_a == runner_b {
+        return;
+    }
 
     cluster.partition(Side::A);
     assert!(cluster.acquire(Side::A, job, runner_a).is_ok());
     assert!(cluster.acquire(Side::B, job, runner_b).is_ok());
-    assert_eq!(cluster.global_active_count(job), 2);
+    assert_eq!(cluster.global_active_count_for_job(job), 2);
 }
 
 /// Heal discards minority state. Minority sees no active leases after heal.
@@ -205,6 +199,9 @@ fn heal_discards_minority_state(tc: hegel::TestCase) {
     let job = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
     let runner_a = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
     let runner_b = tc.draw(generators::integers::<u64>().min_value(0).max_value(100));
+    if runner_a == runner_b {
+        return;
+    }
 
     cluster.partition(Side::A);
     let _ = cluster.acquire(Side::A, job, runner_a);
@@ -212,8 +209,8 @@ fn heal_discards_minority_state(tc: hegel::TestCase) {
     cluster.heal();
 
     // A is majority → retains its acquire. B is minority → reset to empty.
-    assert!(cluster.side_has_active(Side::A, job));
-    assert!(!cluster.side_has_active(Side::B, job));
-    // Global count = 1 now. Split brain resolved in A's favour.
-    assert_eq!(cluster.global_active_count(job), 1);
+    assert!(cluster.side_has_active(Side::A, job, runner_a));
+    assert!(!cluster.side_has_active(Side::B, job, runner_b));
+    // Global count for the job = 1 now (only A's lease survives).
+    assert_eq!(cluster.global_active_count_for_job(job), 1);
 }

@@ -117,19 +117,30 @@ impl<C: Clock + Clone> TwoReplicaCluster<C> {
         self.partitioned
     }
 
-    /// Whether replica `side` currently has an active lease for `job`.
-    pub fn side_has_active(&mut self, side: Side, job: JobId) -> bool {
-        self.replica_mut(side).active_lease_for(job).is_some()
+    /// Whether replica `side` currently has an active lease for the
+    /// `(job, runner)` pair.
+    pub fn side_has_active(&mut self, side: Side, job: JobId, runner: RunnerId) -> bool {
+        self.replica_mut(side)
+            .active_lease_for(job, runner)
+            .is_some()
     }
 
-    /// Total active leases across both replicas for a single job.
-    /// During partition this can be 2 (split brain); in Connected mode
-    /// it should be 0 or 2 only because both replicas stay in sync
-    /// (never 1 — except transiently during rule execution, which the
-    /// test model tolerates).
-    pub fn global_active_count(&mut self, job: JobId) -> usize {
-        usize::from(self.side_has_active(Side::A, job))
-            + usize::from(self.side_has_active(Side::B, job))
+    /// Total active leases across both replicas for the `(job, runner)`
+    /// pair. During partition this can be 2 (split brain); in Connected
+    /// mode it should be 0 or 2 only because both replicas stay in sync.
+    pub fn global_active_count(&mut self, job: JobId, runner: RunnerId) -> usize {
+        usize::from(self.side_has_active(Side::A, job, runner))
+            + usize::from(self.side_has_active(Side::B, job, runner))
+    }
+
+    /// Total distinct active `(job, runner)` pairs for `job`, summed
+    /// across both replicas. Useful for "how many committee members
+    /// across the whole cluster currently hold an active lease on this
+    /// job" — which during partition can exceed the committee size as
+    /// split-brain accumulates.
+    pub fn global_active_count_for_job(&mut self, job: JobId) -> usize {
+        self.replica_a.count_active_for_job(job)
+            + self.replica_b.count_active_for_job(job)
     }
 
     fn replica_mut(&mut self, side: Side) -> &mut LeaseManager<C> {

@@ -55,11 +55,17 @@ pub enum LeaseError {
 /// and on every read-style accessor (`is_active`, `active_lease_for`,
 /// `count_active`). This keeps the in-memory state in sync with the
 /// injected clock without requiring a background task.
+///
+/// **Keying:** uniqueness is per `(job_id, runner_id)` pair, not per
+/// `job_id` alone. A quorum-based CI assigns committees of K runners to
+/// the same job; each pair gets its own lease. To enforce
+/// "one runner per job" again, callers can layer that policy on top of
+/// `count_active_for_job`.
 pub struct LeaseManager<C: Clock> {
     clock: C,
     default_ttl_ns: u64,
     leases: HashMap<LeaseId, Lease>,
-    active_by_job: HashMap<JobId, LeaseId>,
+    active_by_pair: HashMap<(JobId, RunnerId), LeaseId>,
     next_id: LeaseId,
 }
 
@@ -70,28 +76,29 @@ impl<C: Clock> LeaseManager<C> {
             clock,
             default_ttl_ns,
             leases: HashMap::new(),
-            active_by_job: HashMap::new(),
+            active_by_pair: HashMap::new(),
             next_id: 1,
         }
     }
 
-    /// Attempt to acquire a lease on `job_id` for `runner_id`. Returns
-    /// `AlreadyLeased` if the job currently has an active lease. This
-    /// method is also the entry point for *reassignment* after expiry:
-    /// once the prior lease has expired (via `tick`), the same call
-    /// succeeds with a fresh `lease_id`.
+    /// Attempt to acquire a lease for the `(job_id, runner_id)` pair.
+    /// `AlreadyLeased` if that pair already holds an active lease (e.g.,
+    /// the same runner was assigned to the same job twice). Multiple
+    /// runners can hold simultaneous leases on the same `job_id` —
+    /// that's the committee case.
     ///
     /// # Errors
     ///
-    /// Returns `LeaseError::AlreadyLeased` if an active lease exists for
-    /// the job.
+    /// Returns `LeaseError::AlreadyLeased` if the pair currently holds
+    /// an active lease.
     pub fn acquire(
         &mut self,
         job_id: JobId,
         runner_id: RunnerId,
     ) -> Result<LeaseId, LeaseError> {
         self.tick();
-        if self.active_by_job.contains_key(&job_id) {
+        let key = (job_id, runner_id);
+        if self.active_by_pair.contains_key(&key) {
             return Err(LeaseError::AlreadyLeased);
         }
         let id = self.next_id;
@@ -105,7 +112,7 @@ impl<C: Clock> LeaseManager<C> {
             state: LeaseState::Active,
         };
         self.leases.insert(id, lease);
-        self.active_by_job.insert(job_id, id);
+        self.active_by_pair.insert(key, id);
         Ok(id)
     }
 
@@ -117,7 +124,7 @@ impl<C: Clock> LeaseManager<C> {
         if let Some(lease) = self.leases.get_mut(&lease_id) {
             if matches!(lease.state, LeaseState::Active) {
                 lease.state = LeaseState::Completed;
-                self.active_by_job.remove(&lease.job_id);
+                self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
             }
         }
     }
@@ -135,7 +142,7 @@ impl<C: Clock> LeaseManager<C> {
         for id in to_expire {
             if let Some(lease) = self.leases.get_mut(&id) {
                 lease.state = LeaseState::Expired;
-                self.active_by_job.remove(&lease.job_id);
+                self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
             }
         }
     }
@@ -148,16 +155,31 @@ impl<C: Clock> LeaseManager<C> {
             .is_some_and(|l| matches!(l.state, LeaseState::Active))
     }
 
-    /// The active lease id for `job_id`, or `None` if none active.
-    pub fn active_lease_for(&mut self, job_id: JobId) -> Option<LeaseId> {
+    /// The active lease id for the `(job_id, runner_id)` pair, or `None`.
+    pub fn active_lease_for(&mut self, job_id: JobId, runner_id: RunnerId) -> Option<LeaseId> {
         self.tick();
-        self.active_by_job.get(&job_id).copied()
+        self.active_by_pair.get(&(job_id, runner_id)).copied()
     }
 
-    /// Count of currently-active leases across all jobs.
+    /// Number of distinct runners with an active lease for `job_id`.
+    pub fn count_active_for_job(&mut self, job_id: JobId) -> usize {
+        self.tick();
+        self.active_by_pair
+            .keys()
+            .filter(|(j, _)| *j == job_id)
+            .count()
+    }
+
+    /// Count of currently-active leases across all `(job, runner)` pairs.
     pub fn count_active(&mut self) -> usize {
         self.tick();
-        self.active_by_job.len()
+        self.active_by_pair.len()
+    }
+
+    /// All currently-active `(job_id, runner_id)` pairs. Useful for tests.
+    pub fn active_pairs(&mut self) -> Vec<(JobId, RunnerId)> {
+        self.tick();
+        self.active_by_pair.keys().copied().collect()
     }
 
     /// Current state of a lease, or `None` if unknown. Returns authoritative
