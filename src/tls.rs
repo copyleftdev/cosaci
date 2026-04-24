@@ -6,6 +6,9 @@
 //! the algebraic layer (certificate chain validity) without running
 //! real servers.
 
+use std::fs;
+use std::io::BufReader;
+use std::path::Path;
 use std::sync::Arc;
 
 use rcgen::{CertificateParams, DnType, Issuer, KeyPair};
@@ -18,6 +21,7 @@ const SERVER_NAME: &str = "cosaci.local";
 /// A self-signed CA — signs end-entity (client / server) certs.
 pub struct TestCa {
     cert_der: CertificateDer<'static>,
+    cert_pem: String,
     issuer: Issuer<'static, KeyPair>,
 }
 
@@ -26,6 +30,8 @@ pub struct TestCa {
 pub struct IssuedCert {
     pub cert_der: CertificateDer<'static>,
     pub key_der: PrivateKeyDer<'static>,
+    pub cert_pem: String,
+    pub key_pem: String,
 }
 
 impl TestCa {
@@ -36,8 +42,13 @@ impl TestCa {
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let cert = params.self_signed(&signing_key)?;
         let cert_der = cert.der().clone();
+        let cert_pem = cert.pem();
         let issuer = Issuer::new(params, signing_key);
-        Ok(Self { cert_der, issuer })
+        Ok(Self {
+            cert_der,
+            cert_pem,
+            issuer,
+        })
     }
 
     /// Issue a new end-entity certificate (client or server) bound to
@@ -49,14 +60,140 @@ impl TestCa {
         params.distinguished_name.push(DnType::CommonName, subject_name);
         let cert = params.signed_by(&key, &self.issuer)?;
         let cert_der = cert.der().clone();
+        let cert_pem = cert.pem();
+        let key_pem = key.serialize_pem();
         let key_der: PrivateKeyDer<'static> =
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
-        Ok(IssuedCert { cert_der, key_der })
+        Ok(IssuedCert {
+            cert_der,
+            key_der,
+            cert_pem,
+            key_pem,
+        })
     }
 
     pub fn cert_der(&self) -> &CertificateDer<'static> {
         &self.cert_der
     }
+
+    pub fn cert_pem(&self) -> &str {
+        &self.cert_pem
+    }
+
+    /// Write the CA's certificate to `path` as PEM.
+    ///
+    /// # Errors
+    ///
+    /// I/O errors from `fs::write`.
+    pub fn write_pem<P: AsRef<Path>>(&self, cert_path: P) -> std::io::Result<()> {
+        fs::write(cert_path, &self.cert_pem)
+    }
+}
+
+impl IssuedCert {
+    /// Write certificate and private key to disk as PEM files.
+    ///
+    /// # Errors
+    ///
+    /// I/O errors from `fs::write`.
+    pub fn write_pem<P: AsRef<Path>>(&self, cert_path: P, key_path: P) -> std::io::Result<()> {
+        fs::write(cert_path, &self.cert_pem)?;
+        fs::write(key_path, &self.key_pem)?;
+        Ok(())
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// PEM file loaders
+// ────────────────────────────────────────────────────────────────────────
+
+/// Read a PEM-encoded certificate chain into rustls DER form.
+///
+/// # Errors
+///
+/// I/O errors from opening / reading the file, or no certs found.
+pub fn read_cert_chain<P: AsRef<Path>>(
+    path: P,
+) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
+        .filter_map(Result::ok)
+        .collect();
+    if chain.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "no certificates in PEM file",
+        ));
+    }
+    Ok(chain)
+}
+
+/// Read a PEM-encoded private key into rustls DER form.
+///
+/// # Errors
+///
+/// I/O errors, or no key found in the PEM.
+pub fn read_private_key<P: AsRef<Path>>(path: P) -> std::io::Result<PrivateKeyDer<'static>> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    rustls_pemfile::private_key(&mut reader)?
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "no private key in PEM file")
+        })
+}
+
+/// Build a server config from PEM files: trust roots (CA), server
+/// certificate chain, server private key. Requires client authentication.
+///
+/// # Errors
+///
+/// I/O errors from the PEM files, or rustls config errors.
+pub fn server_config_from_paths<P: AsRef<Path>>(
+    ca_path: P,
+    cert_path: P,
+    key_path: P,
+) -> Result<Arc<ServerConfig>, String> {
+    let ca_chain = read_cert_chain(ca_path).map_err(|e| format!("read CA: {e}"))?;
+    let mut roots = RootCertStore::empty();
+    for c in ca_chain {
+        roots.add(c).map_err(|e| format!("add CA: {e}"))?;
+    }
+    let cert_chain = read_cert_chain(cert_path).map_err(|e| format!("read cert: {e}"))?;
+    let key = read_private_key(key_path).map_err(|e| format!("read key: {e}"))?;
+    let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| format!("client verifier: {e}"))?;
+    let cfg = ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(cert_chain, key)
+        .map_err(|e| format!("with_single_cert: {e}"))?;
+    Ok(Arc::new(cfg))
+}
+
+/// Build a client config from PEM files: trust roots, client cert
+/// chain, client private key.
+///
+/// # Errors
+///
+/// I/O errors from the PEM files, or rustls config errors.
+pub fn client_config_from_paths<P: AsRef<Path>>(
+    ca_path: P,
+    cert_path: P,
+    key_path: P,
+) -> Result<Arc<ClientConfig>, String> {
+    let ca_chain = read_cert_chain(ca_path).map_err(|e| format!("read CA: {e}"))?;
+    let mut roots = RootCertStore::empty();
+    for c in ca_chain {
+        roots.add(c).map_err(|e| format!("add CA: {e}"))?;
+    }
+    let cert_chain = read_cert_chain(cert_path).map_err(|e| format!("read cert: {e}"))?;
+    let key = read_private_key(key_path).map_err(|e| format!("read key: {e}"))?;
+    let cfg = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(cert_chain, key)
+        .map_err(|e| format!("with_client_auth_cert: {e}"))?;
+    Ok(Arc::new(cfg))
 }
 
 /// Build a `RootCertStore` trusting this CA's root.

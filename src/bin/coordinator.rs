@@ -1,35 +1,47 @@
-//! CosaCI coordinator — accepts agent registrations over TCP, runs one
-//! job through VRF assignment + quorum aggregation + Merkle anchoring,
-//! then shuts down. v0.1 is plaintext TCP; mTLS over `rustls::Stream`
-//! is a drop-in at the `TcpStream` layer (`src/tls.rs` is the
-//! handshake harness).
+//! CosaCI coordinator — accepts agent registrations over mTLS, runs
+//! one job through VRF assignment + quorum aggregation + Merkle
+//! anchoring, then shuts down. v0.1 expects CA + server cert + key on
+//! disk; the demo launcher generates them at startup.
 //!
 //! Run with `cargo run --bin coordinator -- --addr 127.0.0.1:7878
-//!                                           --committee 3`.
+//!                                          --ca /path/ca.pem
+//!                                          --cert /path/server.pem
+//!                                          --key  /path/server.key.pem
+//!                                          --fleet 5 --committee 3`.
 
 use std::collections::HashMap;
 use std::env;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use cosaci::attestation::AttestationResult;
 use cosaci::merkle_log::MerkleLog;
 use cosaci::proto::{read_envelope, write_envelope, Envelope};
 use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
 use cosaci::signing::VerifyingKey;
+use cosaci::tls::{install_crypto_provider, server_config_from_paths};
+
+type ServerStream = StreamOwned<ServerConnection, TcpStream>;
 
 struct RegisteredAgent {
     runner_id: RunnerId,
-    stream: TcpStream,
+    stream: ServerStream,
     signing_pk: VerifyingKey,
     vrf_pk: [u8; 32],
     stake: u64,
 }
 
 fn main() -> std::io::Result<()> {
-    // CLI: addr + committee size + fleet size
+    install_crypto_provider();
+
     let args: Vec<String> = env::args().collect();
     let addr = arg_or(&args, "--addr", "127.0.0.1:7878");
+    let ca_path = arg_or(&args, "--ca", "ca.pem");
+    let cert_path = arg_or(&args, "--cert", "server.pem");
+    let key_path = arg_or(&args, "--key", "server.key.pem");
     let fleet: u64 = arg_or(&args, "--fleet", "5").parse().expect("fleet u64");
     let committee: usize = arg_or(&args, "--committee", "3")
         .parse()
@@ -37,14 +49,34 @@ fn main() -> std::io::Result<()> {
     let job_a: i32 = arg_or(&args, "--a", "21").parse().expect("a i32");
     let job_b: i32 = arg_or(&args, "--b", "21").parse().expect("b i32");
 
-    println!("[coordinator] listening on {addr}");
+    let server_cfg: Arc<ServerConfig> =
+        server_config_from_paths(&ca_path, &cert_path, &key_path)
+            .map_err(|e| std::io::Error::other(format!("server config: {e}")))?;
+
+    println!("[coordinator] listening on {addr} (mTLS)");
     let listener = TcpListener::bind(&addr)?;
 
-    // ── Accept `fleet` Register envelopes ───────────────────────────────
+    // ── Accept `fleet` mTLS connections + Register envelopes ────────────
     let mut agents: Vec<RegisteredAgent> = Vec::with_capacity(fleet as usize);
-    for _ in 0..fleet {
-        let (mut stream, peer) = listener.accept()?;
-        let env = read_envelope(&mut stream)?;
+    while agents.len() < fleet as usize {
+        let (tcp, peer) = listener.accept()?;
+        tcp.set_nodelay(true)?;
+        let conn = match ServerConnection::new(server_cfg.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[coordinator] ServerConnection::new for {peer}: {e}");
+                continue;
+            }
+        };
+        let mut stream = ServerStream::new(conn, tcp);
+
+        let env = match read_envelope(&mut stream) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[coordinator] handshake/read failed for {peer}: {e}");
+                continue;
+            }
+        };
         let Envelope::Register {
             runner_id,
             signing_pubkey,
@@ -62,9 +94,12 @@ fn main() -> std::io::Result<()> {
                 continue;
             }
         };
-        write_envelope(&mut stream, &Envelope::RegisterAck)?;
+        if let Err(e) = write_envelope(&mut stream, &Envelope::RegisterAck) {
+            eprintln!("[coordinator] ack write failed for {peer}: {e}");
+            continue;
+        }
         println!(
-            "[coordinator] registered runner {} from {} (stake {})",
+            "[coordinator] registered runner {} from {} (stake {}, mTLS ✓)",
             runner_id, peer, stake
         );
         agents.push(RegisteredAgent {
@@ -77,26 +112,18 @@ fn main() -> std::io::Result<()> {
     }
     println!("[coordinator] fleet assembled ({} agents)", agents.len());
 
-    // ── Build the stake map + VRF-assign a committee ────────────────────
+    // ── Build the stake map + select committee ──────────────────────────
     let mut stake_map: StakeMap = HashMap::new();
     for a in &agents {
         stake_map.insert(a.runner_id, a.stake);
     }
-
     let job_id: u64 = 1;
     let job_seed = job_seed_bytes(job_id);
-    // Committee selection: on the coordinator side we re-derive each
-    // agent's VRF output using the agent-reported VRF public key,
-    // via the VRFPreOut comparison pattern — but our schnorrkel wrapper
-    // only signs on the private side. For v0.1 the coordinator uses
-    // the agents' pubkeys as a stable ordering seed (lexmin(SHA256(vrf_pk || seed))).
-    // A production coordinator would instead receive VRFProof from each
-    // agent and verify, OR use a separately-broadcast committee rule.
     let committee = select_committee_by_pubkey_hash(&agents, &job_seed, committee);
     println!("[coordinator] committee: {committee:?}");
 
     // ── Broadcast Assign to committee ───────────────────────────────────
-    let deadline = now_unix_ns() + 60_000_000_000; // +60s
+    let deadline = now_unix_ns() + 60_000_000_000;
     for a in agents.iter_mut() {
         if committee.contains(&a.runner_id) {
             write_envelope(
@@ -137,7 +164,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // ── Aggregate via stake-weighted quorum ─────────────────────────────
+    // ── Aggregate ───────────────────────────────────────────────────────
     let mut artifact_counts: HashMap<[u8; 32], u32> = HashMap::new();
     let votes: Vec<Vote> = attestations
         .iter()
@@ -168,7 +195,6 @@ fn main() -> std::io::Result<()> {
         outcome, threshold, committee_stake
     );
 
-    // ── Anchor into Merkle log if Pass ──────────────────────────────────
     if outcome == Outcome::Pass {
         let mut log = MerkleLog::new();
         let pos = log.append(consensus_artifact);
@@ -180,10 +206,11 @@ fn main() -> std::io::Result<()> {
         );
     }
 
-    // ── Tell agents to shut down ────────────────────────────────────────
+    // ── Shutdown ────────────────────────────────────────────────────────
     for a in agents.iter_mut() {
         let _ = write_envelope(&mut a.stream, &Envelope::Shutdown);
-        let _ = a.stream.shutdown(std::net::Shutdown::Both);
+        // Sending close_notify cleanly is best-effort for a demo.
+        let _ = a.stream.sock.shutdown(std::net::Shutdown::Both);
     }
     println!("[coordinator] done");
     Ok(())
@@ -216,11 +243,6 @@ fn now_unix_ns() -> i64 {
         .unwrap_or(0)
 }
 
-/// Committee selection for v0.1: sort agents by `SHA256(vrf_pk || seed)`,
-/// pick the k with the smallest hash. Deterministic, verifiable by anyone
-/// who knows the agents' VRF public keys — but not the VRF proof path
-/// (which would require each agent to broadcast its VRFProof). A
-/// production coordinator would use full VRF.
 fn select_committee_by_pubkey_hash(
     agents: &[RegisteredAgent],
     seed: &[u8; 32],
