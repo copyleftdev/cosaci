@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cosaci::lease::{LeaseError, LeaseId, LeaseManager, LeaseState};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 mod common;
 use common::TestClock;
@@ -175,7 +175,8 @@ impl LeaseTest {
                 self.manager.active_lease_for(job, runner),
                 Some(expected_lease),
                 "active lease for ({}, {}) diverged",
-                job, runner
+                job,
+                runner
             );
             assert!(
                 self.manager.is_active(expected_lease),
@@ -199,7 +200,10 @@ impl LeaseTest {
             if !currently_active.contains(&lid) {
                 let state = self.manager.state_of(lid);
                 assert!(
-                    matches!(state, Some(LeaseState::Completed) | Some(LeaseState::Expired)),
+                    matches!(
+                        state,
+                        Some(LeaseState::Completed) | Some(LeaseState::Expired)
+                    ),
                     "lease {} should be Completed or Expired, got {:?}",
                     lid,
                     state

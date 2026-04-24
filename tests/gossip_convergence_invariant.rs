@@ -7,8 +7,8 @@
 //! Propagation *time* (vs merely convergence) is the B-stat
 //! `gossip-propagation-time` card in Tier 2; we don't touch it here.
 
-use cosaci::gossip::{merge, Key, NodeState, Timestamp, Value};
-use hegel::{generators, TestCase};
+use cosaci::gossip::{Key, NodeState, Timestamp, Value, merge};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
@@ -18,11 +18,7 @@ fn draw_state(tc: &TestCase) -> NodeState {
     let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(8));
     let mut s = NodeState::new();
     for _ in 0..n {
-        let k = tc.draw(
-            generators::integers::<Key>()
-                .min_value(0)
-                .max_value(10),
-        );
+        let k = tc.draw(generators::integers::<Key>().min_value(0).max_value(10));
         let v = tc.draw(generators::integers::<Value>().max_value(1_000));
         let t = tc.draw(generators::integers::<Timestamp>().max_value(1_000));
         s.write(k, v, t);

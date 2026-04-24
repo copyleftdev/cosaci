@@ -4,9 +4,7 @@
 //! (SPEC.md §10.2, class A, load-bearing — the Merkle log and trust chain
 //! downstream assume `hash(attestation)` is a stable content identifier).
 
-use cosaci::attestation::{
-    canonicalize, decanonicalize, hash, Attestation, AttestationResult,
-};
+use cosaci::attestation::{Attestation, AttestationResult, canonicalize, decanonicalize, hash};
 use hegel::generators;
 
 // ----------------------------------------------------------------------------
@@ -51,7 +49,10 @@ fn canonicalize_is_deterministic(tc: hegel::TestCase) {
     let a = draw_attestation(&tc);
     let b1 = canonicalize(&a);
     let b2 = canonicalize(&a);
-    assert_eq!(b1, b2, "canonicalize produced different bytes for same input");
+    assert_eq!(
+        b1, b2,
+        "canonicalize produced different bytes for same input"
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -76,7 +77,10 @@ fn roundtrip_equality(tc: hegel::TestCase) {
     let a = draw_attestation(&tc);
     let bytes = canonicalize(&a);
     let a2 = decanonicalize(&bytes).expect("round-trip must deserialize successfully");
-    assert_eq!(a, a2, "deserialize of canonical encoding did not recover original");
+    assert_eq!(
+        a, a2,
+        "deserialize of canonical encoding did not recover original"
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -91,7 +95,10 @@ fn idempotent_re_encoding(tc: hegel::TestCase) {
     let b1 = canonicalize(&a);
     let a2 = decanonicalize(&b1).expect("round-trip must deserialize successfully");
     let b2 = canonicalize(&a2);
-    assert_eq!(b1, b2, "re-encoding after round-trip produced different bytes");
+    assert_eq!(
+        b1, b2,
+        "re-encoding after round-trip produced different bytes"
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -106,11 +113,7 @@ fn all_fields_contribute_to_hash(tc: hegel::TestCase) {
     let a = draw_attestation(&tc);
     let h_orig = hash(&a);
 
-    let field_idx = tc.draw(
-        generators::integers::<u8>()
-            .min_value(0)
-            .max_value(8),
-    );
+    let field_idx = tc.draw(generators::integers::<u8>().min_value(0).max_value(8));
 
     let mut b = a.clone();
     match field_idx {
@@ -151,7 +154,11 @@ fn all_fields_contribute_to_hash(tc: hegel::TestCase) {
         _ => unreachable!("field_idx bounded by generator"),
     }
 
-    assert_ne!(a, b, "mutation path {} produced structurally-equal value", field_idx);
+    assert_ne!(
+        a, b,
+        "mutation path {} produced structurally-equal value",
+        field_idx
+    );
     assert_ne!(
         h_orig,
         hash(&b),

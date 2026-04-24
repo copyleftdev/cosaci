@@ -85,7 +85,10 @@ pub fn read_envelope<R: Read>(r: &mut R) -> std::io::Result<Envelope> {
     if len > MAX_ENVELOPE_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("incoming envelope declared {} bytes > max {}", len, MAX_ENVELOPE_BYTES),
+            format!(
+                "incoming envelope declared {} bytes > max {}",
+                len, MAX_ENVELOPE_BYTES
+            ),
         ));
     }
     let mut buf = vec![0_u8; len];

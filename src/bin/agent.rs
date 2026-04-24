@@ -17,7 +17,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use cosaci::attestation::{Attestation, AttestationResult};
-use cosaci::proto::{read_envelope, write_envelope, Envelope};
+use cosaci::proto::{Envelope, read_envelope, write_envelope};
 use cosaci::quorum::RunnerId;
 use cosaci::signing::Keypair;
 use cosaci::tls::{client_config_from_paths, install_crypto_provider};
@@ -99,8 +99,8 @@ fn main() -> std::io::Result<()> {
                 deadline_unix_ns,
             } => {
                 println!("[agent {id}] assigned job {job_id}: add({a}, {b})");
-                let result = execute_add(a, b)
-                    .map_err(|e| std::io::Error::other(format!("wasm: {e}")))?;
+                let result =
+                    execute_add(a, b).map_err(|e| std::io::Error::other(format!("wasm: {e}")))?;
                 let artifact = output_hash(result);
                 let mut att = Attestation {
                     version: Attestation::VERSION,

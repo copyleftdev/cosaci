@@ -8,8 +8,8 @@
 
 use std::collections::HashSet;
 
-use cosaci::verifier::{compute_root, inclusion_proof, verify_inclusion, LeafHash};
-use hegel::{generators, TestCase};
+use cosaci::verifier::{LeafHash, compute_root, inclusion_proof, verify_inclusion};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers

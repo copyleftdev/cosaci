@@ -48,7 +48,9 @@ fn keys_remain_readable_during_migration(tc: hegel::TestCase) {
             store.get(k),
             Some(v),
             "key {} lost during migration (n1={}, n2={})",
-            k, n1, n2
+            k,
+            n1,
+            n2
         );
     }
 }
@@ -126,7 +128,12 @@ fn complete_rebalance_loses_no_keys(tc: hegel::TestCase) {
     assert!(!store.is_migrating());
 
     for (&k, &v) in &model {
-        assert_eq!(store.get(k), Some(v), "key {} lost after complete_rebalance", k);
+        assert_eq!(
+            store.get(k),
+            Some(v),
+            "key {} lost after complete_rebalance",
+            k
+        );
     }
     assert_eq!(store.len(), model.len());
 }

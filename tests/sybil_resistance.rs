@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
+use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use hegel::generators;
 
 const TOTAL_STAKE: u64 = 10_000;
@@ -92,18 +92,10 @@ fn simulate_sybil_attack(
 
 #[hegel::test(test_cases = 15)]
 fn sybil_attack_cannot_force_pass(tc: hegel::TestCase) {
-    let s_hundredths = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(50),
-    );
+    let s_hundredths = tc.draw(generators::integers::<u32>().min_value(0).max_value(50));
     let sybil_stake = f64::from(s_hundredths) / 100.0;
 
-    let n_runners = tc.draw(
-        generators::integers::<usize>()
-            .min_value(10)
-            .max_value(60),
-    );
+    let n_runners = tc.draw(generators::integers::<usize>().min_value(10).max_value(60));
     let k_max = (n_runners * 4 / 5).max(1);
     let k = tc.draw(
         generators::integers::<usize>()
@@ -113,11 +105,7 @@ fn sybil_attack_cannot_force_pass(tc: hegel::TestCase) {
 
     // Attacker coordination — bounded to realistic range. At coord=1 the
     // attack is maximally effective; at coord=0 attackers all vote Fail.
-    let coord_hundredths = tc.draw(
-        generators::integers::<u32>()
-            .min_value(50)
-            .max_value(100),
-    );
+    let coord_hundredths = tc.draw(generators::integers::<u32>().min_value(50).max_value(100));
     let coord = f64::from(coord_hundredths) / 100.0;
 
     let seed = tc.draw(generators::integers::<u64>());
@@ -125,8 +113,7 @@ fn sybil_attack_cannot_force_pass(tc: hegel::TestCase) {
     let mut outcomes: HashMap<Outcome, u32> = HashMap::new();
     for inner in 0..N_INNER {
         let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(inner as u64));
-        let outcome =
-            simulate_sybil_attack(n_runners, sybil_stake, k, coord, &mut rng);
+        let outcome = simulate_sybil_attack(n_runners, sybil_stake, k, coord, &mut rng);
         *outcomes.entry(outcome).or_insert(0) += 1;
     }
 
@@ -143,22 +130,10 @@ fn sybil_attack_cannot_force_pass(tc: hegel::TestCase) {
 // ----------------------------------------------------------------------------
 #[hegel::test(test_cases = 15)]
 fn k_does_not_enable_pass(tc: hegel::TestCase) {
-    let s_hundredths = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(50),
-    );
+    let s_hundredths = tc.draw(generators::integers::<u32>().min_value(0).max_value(50));
     let s = f64::from(s_hundredths) / 100.0;
-    let n = tc.draw(
-        generators::integers::<usize>()
-            .min_value(10)
-            .max_value(60),
-    );
-    let coord_h = tc.draw(
-        generators::integers::<u32>()
-            .min_value(50)
-            .max_value(100),
-    );
+    let n = tc.draw(generators::integers::<usize>().min_value(10).max_value(60));
+    let coord_h = tc.draw(generators::integers::<u32>().min_value(50).max_value(100));
     let coord = f64::from(coord_h) / 100.0;
     let seed = tc.draw(generators::integers::<u64>());
 
@@ -178,7 +153,10 @@ fn k_does_not_enable_pass(tc: hegel::TestCase) {
             outcome,
             Outcome::Pass,
             "Sybil achieved Pass via k variation (n={}, s={}, coord={}, seed={})",
-            n, s, coord, seed
+            n,
+            s,
+            coord,
+            seed
         );
     }
 }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use cosaci::aggregator::{AggregationState, Aggregator};
 use cosaci::quorum::{RunnerId, StakeMap, Weight};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 /// Build a fleet that, under an empty vote slice, produces `Retry` from
 /// `quorum::aggregate` — threshold is reachable (`< total_stake`) and
@@ -30,11 +30,7 @@ fn retry_prone_fleet() -> (Weight, StakeMap) {
 // ----------------------------------------------------------------------------
 #[hegel::test]
 fn escalates_when_retries_exceed_max(tc: TestCase) {
-    let max_retries = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(20),
-    );
+    let max_retries = tc.draw(generators::integers::<u32>().min_value(0).max_value(20));
     let (threshold, stake) = retry_prone_fleet();
     let mut agg = Aggregator::with_max_retries(threshold, stake, max_retries);
 
@@ -45,7 +41,8 @@ fn escalates_when_retries_exceed_max(tc: TestCase) {
             s,
             AggregationState::Pending,
             "trigger {} escalated too early (max_retries={})",
-            i, max_retries
+            i,
+            max_retries
         );
     }
     // The (max_retries+1)-th trigger crosses the bound → Escalate.
@@ -69,11 +66,7 @@ fn escalates_when_retries_exceed_max(tc: TestCase) {
 // ----------------------------------------------------------------------------
 #[hegel::test]
 fn default_constructor_does_not_bound_retries(tc: TestCase) {
-    let n_triggers = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(200),
-    );
+    let n_triggers = tc.draw(generators::integers::<u32>().min_value(0).max_value(200));
     let (threshold, stake) = retry_prone_fleet();
     let mut agg = Aggregator::new(threshold, stake);
 
@@ -99,11 +92,7 @@ fn default_constructor_does_not_bound_retries(tc: TestCase) {
 fn receive_vote_does_not_increment_retries(tc: TestCase) {
     use cosaci::quorum::{Vote, VoteResult};
 
-    let max_retries = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(5),
-    );
+    let max_retries = tc.draw(generators::integers::<u32>().min_value(0).max_value(5));
     let (threshold, stake) = retry_prone_fleet();
     let mut agg = Aggregator::with_max_retries(threshold, stake, max_retries);
 

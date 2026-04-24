@@ -5,8 +5,8 @@
 //! adversarial-ranking B-stat claim (§8.3b) — if this card is ever
 //! falsified, §8.3b's statistical guarantees are structurally undermined.
 
-use cosaci::reputation::{agreement_rate, reputation, AgreementOutcome, INITIAL_REPUTATION};
-use hegel::{generators, TestCase};
+use cosaci::reputation::{AgreementOutcome, INITIAL_REPUTATION, agreement_rate, reputation};
+use hegel::{TestCase, generators};
 
 fn draw_outcome(tc: &TestCase) -> AgreementOutcome {
     if tc.draw(generators::booleans()) {

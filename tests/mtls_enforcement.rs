@@ -12,8 +12,8 @@
 //! clauses).
 
 use cosaci::tls::{
-    client_config, client_config_no_cert, install_crypto_provider, root_store_from,
-    server_config, try_handshake, TestCa, SUBJECT_SERVER,
+    SUBJECT_SERVER, TestCa, client_config, client_config_no_cert, install_crypto_provider,
+    root_store_from, server_config, try_handshake,
 };
 
 // One-shot crypto-provider installation for all tests in this module.

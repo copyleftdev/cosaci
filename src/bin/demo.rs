@@ -14,7 +14,7 @@ use cosaci::attestation::{Attestation, AttestationResult};
 use cosaci::clock::{Clock, SystemClock};
 use cosaci::lease::LeaseManager;
 use cosaci::merkle_log::MerkleLog;
-use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
+use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci::registry::{Registry, RunnerInfo};
 use cosaci::signing::{Keypair, VerifyingKey};
 use cosaci::vrf::VrfKeypair;
@@ -78,8 +78,12 @@ fn main() {
     let agents: Vec<Agent> = (0..fleet_size)
         .map(|i| Agent::new(i as RunnerId, stake_per))
         .collect();
-    println!("▸ Fleet: {} runners, stake {} each (total {})",
-        fleet_size, stake_per, fleet_size * stake_per);
+    println!(
+        "▸ Fleet: {} runners, stake {} each (total {})",
+        fleet_size,
+        stake_per,
+        fleet_size * stake_per
+    );
 
     // ─── 2. Coordinator registers them ───────────────────────────────────
     let clock = SystemClock;
@@ -109,9 +113,13 @@ fn main() {
     let job_id: u64 = 1;
     let job_input: (i32, i32) = (21, 21);
     let job_seed = job_seed_bytes(job_id);
-    println!("▸ Job {}: WASM add({}, {}) → expected {}",
-        job_id, job_input.0, job_input.1,
-        job_input.0.wrapping_add(job_input.1));
+    println!(
+        "▸ Job {}: WASM add({}, {}) → expected {}",
+        job_id,
+        job_input.0,
+        job_input.1,
+        job_input.0.wrapping_add(job_input.1)
+    );
 
     // ─── 4. VRF-assign K runners (lowest VRF output wins a slot) ─────────
     let committee_size: usize = 3;
@@ -128,7 +136,10 @@ fn main() {
     for &runner_id in &assigned {
         match coord.lease_mgr.acquire(job_id, runner_id) {
             Ok(lease_id) => println!("  · lease {} issued to runner {}", lease_id, runner_id),
-            Err(_) => println!("  · lease rejected for runner {} (single-lease-per-job; see note)", runner_id),
+            Err(_) => println!(
+                "  · lease rejected for runner {} (single-lease-per-job; see note)",
+                runner_id
+            ),
         }
     }
 
@@ -136,8 +147,7 @@ fn main() {
     let mut attestations: Vec<Attestation> = Vec::new();
     for &runner_id in &assigned {
         let agent = &agents[runner_id as usize];
-        let result = execute_add(job_input.0, job_input.1)
-            .expect("wasm execution");
+        let result = execute_add(job_input.0, job_input.1).expect("wasm execution");
         let artifact = output_hash(result);
         let mut att = Attestation {
             version: Attestation::VERSION,
@@ -153,8 +163,10 @@ fn main() {
         att.sign_with(&agent.signing);
         attestations.push(att);
     }
-    println!("▸ {} attestations signed (one per committee member)",
-        attestations.len());
+    println!(
+        "▸ {} attestations signed (one per committee member)",
+        attestations.len()
+    );
 
     // ─── 7. Coordinator verifies signatures + consistency ────────────────
     let mut verified_votes: Vec<Vote> = Vec::new();
@@ -176,19 +188,24 @@ fn main() {
                 },
             });
         }
-        println!("  · runner {} sig={} artifact={:x?}…",
+        println!(
+            "  · runner {} sig={} artifact={:x?}…",
             att.runner_id,
             if sig_ok { "ok" } else { "BAD" },
-            &att.artifact_hash[..4]);
+            &att.artifact_hash[..4]
+        );
     }
     let consensus_artifact = seen_artifacts
         .iter()
         .max_by_key(|&(_, c)| *c)
         .map(|(k, _)| *k)
         .expect("at least one attestation");
-    println!("▸ Consensus artifact: {:x?}… ({} / {} agree)",
+    println!(
+        "▸ Consensus artifact: {:x?}… ({} / {} agree)",
         &consensus_artifact[..8],
-        seen_artifacts[&consensus_artifact], attestations.len());
+        seen_artifacts[&consensus_artifact],
+        attestations.len()
+    );
 
     // ─── 8. Quorum aggregate ─────────────────────────────────────────────
     // Threshold = ceil(2/3 of committee stake).
@@ -198,22 +215,30 @@ fn main() {
         .sum();
     let threshold = (committee_stake * 2 + 2) / 3; // ceil(2*stake/3)
     let outcome = aggregate(&verified_votes, threshold, &coord.stake);
-    println!("▸ Quorum: threshold {} (committee stake {}), outcome {:?}",
-        threshold, committee_stake, outcome);
+    println!(
+        "▸ Quorum: threshold {} (committee stake {}), outcome {:?}",
+        threshold, committee_stake, outcome
+    );
 
     // ─── 9. Anchor result into the Merkle log ────────────────────────────
     if outcome == Outcome::Pass {
         let position = coord.log.append(consensus_artifact);
         let root = coord.log.root().expect("nonempty after append");
         let peaks = coord.log.peak_hashes(coord.log.len());
-        println!("▸ Merkle log: position {}, root {:x?}…, {} peak(s)",
-            position, &root[..8], peaks.len());
+        println!(
+            "▸ Merkle log: position {}, root {:x?}…, {} peak(s)",
+            position,
+            &root[..8],
+            peaks.len()
+        );
 
         // Verify the inclusion proof of our freshly-appended entry.
         let proof = coord.log.inclusion_proof(position).expect("member");
         let verified = cosaci::merkle_log::verify_inclusion(&proof, root);
-        println!("▸ Inclusion proof verification: {}",
-            if verified { "ok" } else { "BAD" });
+        println!(
+            "▸ Inclusion proof verification: {}",
+            if verified { "ok" } else { "BAD" }
+        );
     }
 
     println!("\n═══════════════════════════════════════════════════════════════");

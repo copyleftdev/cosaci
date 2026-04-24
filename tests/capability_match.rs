@@ -5,8 +5,8 @@
 
 use std::collections::HashSet;
 
-use cosaci::capabilities::{matches, Capabilities, JobRequirements, Platform, Runtime};
-use hegel::{generators, TestCase};
+use cosaci::capabilities::{Capabilities, JobRequirements, Platform, Runtime, matches};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
@@ -44,7 +44,11 @@ fn draw_runtime_set(tc: &TestCase) -> HashSet<Runtime> {
 fn draw_capabilities(tc: &TestCase) -> Capabilities {
     Capabilities {
         cpu: tc.draw(generators::integers::<u32>().min_value(0).max_value(128)),
-        memory_mb: tc.draw(generators::integers::<u32>().min_value(0).max_value(131_072)),
+        memory_mb: tc.draw(
+            generators::integers::<u32>()
+                .min_value(0)
+                .max_value(131_072),
+        ),
         platform: draw_platform(tc),
         runtimes: draw_runtime_set(tc),
     }
@@ -53,7 +57,11 @@ fn draw_capabilities(tc: &TestCase) -> Capabilities {
 fn draw_job(tc: &TestCase) -> JobRequirements {
     JobRequirements {
         cpu: tc.draw(generators::integers::<u32>().min_value(0).max_value(128)),
-        memory_mb: tc.draw(generators::integers::<u32>().min_value(0).max_value(131_072)),
+        memory_mb: tc.draw(
+            generators::integers::<u32>()
+                .min_value(0)
+                .max_value(131_072),
+        ),
         platform: draw_platform(tc),
         runtimes: draw_runtime_set(tc),
     }
@@ -131,7 +139,11 @@ fn match_antimonotone_in_requirements(tc: hegel::TestCase) {
     easier.memory_mb -= mem_drop;
     if !easier.runtimes.is_empty() && tc.draw(generators::booleans()) {
         // Optionally drop one required runtime.
-        let any: Runtime = *easier.runtimes.iter().next().expect("nonempty checked above");
+        let any: Runtime = *easier
+            .runtimes
+            .iter()
+            .next()
+            .expect("nonempty checked above");
         easier.runtimes.remove(&any);
     }
 

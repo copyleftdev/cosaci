@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-use cosaci::bloom::{theoretical_fp_rate, BloomFilter};
+use cosaci::bloom::{BloomFilter, theoretical_fp_rate};
 use hegel::generators;
 
 // ----------------------------------------------------------------------------
@@ -23,16 +23,8 @@ fn no_false_negatives(tc: hegel::TestCase) {
             .min_value(64)
             .max_value(8_192),
     );
-    let k = tc.draw(
-        generators::integers::<usize>()
-            .min_value(1)
-            .max_value(10),
-    );
-    let n = tc.draw(
-        generators::integers::<usize>()
-            .min_value(0)
-            .max_value(200),
-    );
+    let k = tc.draw(generators::integers::<usize>().min_value(1).max_value(10));
+    let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(200));
     let seed = tc.draw(generators::integers::<u64>());
 
     let mut bloom = BloomFilter::new(m_bits, k);
@@ -49,7 +41,9 @@ fn no_false_negatives(tc: hegel::TestCase) {
         assert!(
             bloom.contains(item),
             "false negative for an inserted item (m={}, k={}, n={})",
-            m_bits, k, n
+            m_bits,
+            k,
+            n
         );
     }
 }
@@ -73,21 +67,13 @@ fn empirical_fp_rate_within_bound(tc: hegel::TestCase) {
     // Lower bound `m_bits ≥ 128` rules out the small-m noise regime,
     // and the runtime `if theoretical > 0.5 return` below skips the
     // saturated draws.
-    let n = tc.draw(
-        generators::integers::<usize>()
-            .min_value(10)
-            .max_value(500),
-    );
+    let n = tc.draw(generators::integers::<usize>().min_value(10).max_value(500));
     let m_bits = tc.draw(
         generators::integers::<usize>()
             .min_value((n * 4).max(128))
             .max_value(n * 40),
     );
-    let k = tc.draw(
-        generators::integers::<usize>()
-            .min_value(3)
-            .max_value(10),
-    );
+    let k = tc.draw(generators::integers::<usize>().min_value(3).max_value(10));
     let seed = tc.draw(generators::integers::<u64>());
 
     let mut bloom = BloomFilter::new(m_bits, k);
@@ -136,6 +122,12 @@ fn empirical_fp_rate_within_bound(tc: hegel::TestCase) {
     assert!(
         empirical <= bound,
         "empirical FP {} exceeds bound {} (theoretical={}, m={}, k={}, n={}, seed={})",
-        empirical, bound, theoretical, m_bits, k, n, seed
+        empirical,
+        bound,
+        theoretical,
+        m_bits,
+        k,
+        n,
+        seed
     );
 }

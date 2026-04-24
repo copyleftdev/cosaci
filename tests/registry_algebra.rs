@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cosaci::registry::{Registry, RunnerId, RunnerInfo};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 // Restrict the id space so rules collide usefully — with a full u64 range,
 // `deregister` would essentially never hit a registered id.
@@ -107,11 +107,7 @@ impl RegistryTest {
                 id
             );
         }
-        assert_eq!(
-            self.subject.len(),
-            self.model.len(),
-            "cardinality diverged"
-        );
+        assert_eq!(self.subject.len(), self.model.len(), "cardinality diverged");
     }
 }
 

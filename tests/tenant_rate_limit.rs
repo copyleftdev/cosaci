@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cosaci::rate_limit::{RateLimiter, TenantId};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 mod common;
 use common::TestClock;

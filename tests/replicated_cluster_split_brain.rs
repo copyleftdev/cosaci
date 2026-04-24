@@ -15,7 +15,7 @@
 //!    prevent divergence mid-partition; recovery is the guarantee.
 
 use cosaci::replicated_cluster::{Side, TwoReplicaCluster};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 mod common;
 use common::TestClock;
@@ -124,8 +124,7 @@ impl SplitBrainTest {
         // Across both replicas, total leases are bounded by
         // 2 (replicas) * JOB_POOL (jobs) * RUNNER_POOL (runners).
         assert!(
-            total_active_across_jobs
-                <= 2 * (JOB_POOL as usize) * (RUNNER_POOL as usize),
+            total_active_across_jobs <= 2 * (JOB_POOL as usize) * (RUNNER_POOL as usize),
             "impossibly many active leases: {}",
             total_active_across_jobs
         );

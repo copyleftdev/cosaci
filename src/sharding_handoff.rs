@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use crate::sharding::{shard_of, Key, Value};
+use crate::sharding::{Key, Value, shard_of};
 
 /// One shard's entries.
 #[derive(Clone, Debug, Default)]

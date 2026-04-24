@@ -53,11 +53,7 @@ fn jains_index(counts: &[u32]) -> f64 {
     (sum * sum) / (n * sum_sq)
 }
 
-fn simulate_fairness_episode(
-    n_runners: usize,
-    n_jobs: usize,
-    rng: &mut ChaCha8Rng,
-) -> f64 {
+fn simulate_fairness_episode(n_runners: usize, n_jobs: usize, rng: &mut ChaCha8Rng) -> f64 {
     let mut counts = vec![0_u32; n_runners];
     for _ in 0..n_jobs {
         let mut seed = [0_u8; 32];
@@ -70,18 +66,10 @@ fn simulate_fairness_episode(
 
 #[hegel::test(test_cases = 15)]
 fn jains_index_meets_bar(tc: hegel::TestCase) {
-    let n_runners = tc.draw(
-        generators::integers::<usize>()
-            .min_value(3)
-            .max_value(20),
-    );
+    let n_runners = tc.draw(generators::integers::<usize>().min_value(3).max_value(20));
     // Jobs-per-runner drives fairness: low-jobs-per-runner gives higher
     // variance (stochastic bias). Use ≥ 30 jobs-per-runner as a floor.
-    let jobs_per_runner = tc.draw(
-        generators::integers::<usize>()
-            .min_value(30)
-            .max_value(200),
-    );
+    let jobs_per_runner = tc.draw(generators::integers::<usize>().min_value(30).max_value(200));
     let n_jobs = n_runners * jobs_per_runner;
     let seed = tc.draw(generators::integers::<u64>());
 
@@ -95,6 +83,10 @@ fn jains_index_meets_bar(tc: hegel::TestCase) {
     assert!(
         mean >= JAIN_BAR,
         "mean Jain's index {} below bar {} (n_runners={}, n_jobs={}, seed={})",
-        mean, JAIN_BAR, n_runners, n_jobs, seed
+        mean,
+        JAIN_BAR,
+        n_runners,
+        n_jobs,
+        seed
     );
 }

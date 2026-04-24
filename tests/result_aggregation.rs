@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use cosaci::aggregator::{AggregationState, Aggregator};
 use cosaci::quorum::{RunnerId, StakeMap, Vote, VoteResult, Weight};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 fn draw_vote(tc: &TestCase, ids: &[RunnerId]) -> Vote {
     let i = tc.draw(
@@ -108,8 +108,7 @@ impl AggregatorTest {
     #[invariant]
     fn vote_count_monotone(&mut self, _: TestCase) {
         assert!(
-            self.subject.vote_count() >= self.expected_vote_count
-                || self.ever_terminal.is_some(),
+            self.subject.vote_count() >= self.expected_vote_count || self.ever_terminal.is_some(),
             "vote count {} below expected {}",
             self.subject.vote_count(),
             self.expected_vote_count
@@ -125,11 +124,7 @@ fn aggregator_lifecycle_matches_model(tc: TestCase) {
     let ids: Vec<RunnerId> = (0..n as RunnerId).collect();
     let mut stake: StakeMap = HashMap::with_capacity(n);
     for &id in &ids {
-        let w = tc.draw(
-            generators::integers::<Weight>()
-                .min_value(1)
-                .max_value(10),
-        );
+        let w = tc.draw(generators::integers::<Weight>().min_value(1).max_value(10));
         stake.insert(id, w);
     }
     let total_stake: Weight = stake.values().copied().sum();

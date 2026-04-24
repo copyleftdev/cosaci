@@ -4,7 +4,7 @@
 //! (SPEC.md §9.1, class A). Wraps `ed25519-dalek` and verifies that our
 //! integration preserves Ed25519's tamper-rejection semantics.
 
-use cosaci::signing::{verify, Keypair, Signature};
+use cosaci::signing::{Keypair, Signature, verify};
 use hegel::generators;
 
 // ----------------------------------------------------------------------------
@@ -32,11 +32,7 @@ fn draw_bit_position_in(tc: &hegel::TestCase, byte_len: usize) -> (usize, u8) {
             .min_value(0)
             .max_value(byte_len - 1),
     );
-    let bit_idx = tc.draw(
-        generators::integers::<u8>()
-            .min_value(0)
-            .max_value(7),
-    );
+    let bit_idx = tc.draw(generators::integers::<u8>().min_value(0).max_value(7));
     (byte_idx, bit_idx)
 }
 

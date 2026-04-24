@@ -15,7 +15,7 @@
 //! a production MMR implementation would use to achieve O(log n) proof
 //! extraction via peak caching.
 
-use rs_merkle::{algorithms::Sha256, Hasher, MerkleProof, MerkleTree};
+use rs_merkle::{Hasher, MerkleProof, MerkleTree, algorithms::Sha256};
 
 /// Leaf / entry hash.
 pub type Hash = [u8; 32];

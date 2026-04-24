@@ -9,7 +9,7 @@
 //! context label `"cosaci-vrf"` to prevent cross-protocol reuse.
 
 use merlin::Transcript;
-use schnorrkel::vrf::{VRFPreOut, VRFProof, VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH};
+use schnorrkel::vrf::{VRF_PREOUT_LENGTH, VRF_PROOF_LENGTH, VRFPreOut, VRFProof};
 use schnorrkel::{ExpansionMode, Keypair, MiniSecretKey, PublicKey};
 
 /// 32-byte seed used to derive a VRF keypair.

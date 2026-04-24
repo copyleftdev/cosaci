@@ -139,8 +139,7 @@ impl<C: Clock + Clone> TwoReplicaCluster<C> {
     /// job" — which during partition can exceed the committee size as
     /// split-brain accumulates.
     pub fn global_active_count_for_job(&mut self, job: JobId) -> usize {
-        self.replica_a.count_active_for_job(job)
-            + self.replica_b.count_active_for_job(job)
+        self.replica_a.count_active_for_job(job) + self.replica_b.count_active_for_job(job)
     }
 
     fn replica_mut(&mut self, side: Side) -> &mut LeaseManager<C> {

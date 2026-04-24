@@ -7,8 +7,8 @@
 //! winner-selection process. The strong statistical B-stat counterpart is
 //! `scheduling-fairness` in Tier 2.
 
-use cosaci::vrf::{verify, VrfKeypair, VrfOutput, VrfProofBytes};
-use hegel::{generators, TestCase};
+use cosaci::vrf::{VrfKeypair, VrfOutput, VrfProofBytes, verify};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
@@ -50,7 +50,11 @@ fn vrf_verify_roundtrip(tc: hegel::TestCase) {
     let pk = kp.public_key_bytes();
     let (out, proof) = kp.evaluate(&input);
     let result = verify(&pk, &input, &out, &proof);
-    assert!(result.is_ok(), "valid VRF did not verify: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "valid VRF did not verify: {:?}",
+        result.err()
+    );
 }
 
 // ----------------------------------------------------------------------------

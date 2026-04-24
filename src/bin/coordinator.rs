@@ -19,8 +19,8 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use cosaci::attestation::AttestationResult;
 use cosaci::merkle_log::MerkleLog;
-use cosaci::proto::{read_envelope, write_envelope, Envelope};
-use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
+use cosaci::proto::{Envelope, read_envelope, write_envelope};
+use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci::signing::VerifyingKey;
 use cosaci::tls::{install_crypto_provider, server_config_from_paths};
 

@@ -13,16 +13,8 @@ use hegel::generators;
 #[hegel::test]
 fn monotone_in_disagreement(tc: hegel::TestCase) {
     let total = tc.draw(generators::integers::<u32>().min_value(1).max_value(1_000));
-    let d1 = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(total),
-    );
-    let d2 = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(total),
-    );
+    let d1 = tc.draw(generators::integers::<u32>().min_value(0).max_value(total));
+    let d2 = tc.draw(generators::integers::<u32>().min_value(0).max_value(total));
     let c1 = flake_confidence(d1, total);
     let c2 = flake_confidence(d2, total);
     if d1 >= d2 {

@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use cosaci::tls::{install_crypto_provider, TestCa, SUBJECT_SERVER};
+use cosaci::tls::{SUBJECT_SERVER, TestCa, install_crypto_provider};
 
 const ADDR: &str = "127.0.0.1:7879";
 const FLEET: u64 = 5;

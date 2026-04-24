@@ -57,7 +57,9 @@ impl TestCa {
     pub fn issue(&self, subject_name: &str) -> Result<IssuedCert, rcgen::Error> {
         let key = KeyPair::generate()?;
         let mut params = CertificateParams::new(vec![subject_name.to_string()])?;
-        params.distinguished_name.push(DnType::CommonName, subject_name);
+        params
+            .distinguished_name
+            .push(DnType::CommonName, subject_name);
         let cert = params.signed_by(&key, &self.issuer)?;
         let cert_der = cert.der().clone();
         let cert_pem = cert.pem();
@@ -112,9 +114,7 @@ impl IssuedCert {
 /// # Errors
 ///
 /// I/O errors from opening / reading the file, or no certs found.
-pub fn read_cert_chain<P: AsRef<Path>>(
-    path: P,
-) -> std::io::Result<Vec<CertificateDer<'static>>> {
+pub fn read_cert_chain<P: AsRef<Path>>(path: P) -> std::io::Result<Vec<CertificateDer<'static>>> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
@@ -137,10 +137,12 @@ pub fn read_cert_chain<P: AsRef<Path>>(
 pub fn read_private_key<P: AsRef<Path>>(path: P) -> std::io::Result<PrivateKeyDer<'static>> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
-    rustls_pemfile::private_key(&mut reader)?
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "no private key in PEM file")
-        })
+    rustls_pemfile::private_key(&mut reader)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "no private key in PEM file",
+        )
+    })
 }
 
 /// Build a server config from PEM files: trust roots (CA), server
@@ -250,8 +252,8 @@ pub fn try_handshake(
     server_cfg: Arc<ServerConfig>,
     client_cfg: Arc<ClientConfig>,
 ) -> Result<(), String> {
-    let server_name = ServerName::try_from(SERVER_NAME)
-        .map_err(|e| format!("invalid server name: {e}"))?;
+    let server_name =
+        ServerName::try_from(SERVER_NAME).map_err(|e| format!("invalid server name: {e}"))?;
     let mut client = ClientConnection::new(client_cfg, server_name)
         .map_err(|e| format!("ClientConnection::new: {e}"))?;
     let mut server =
