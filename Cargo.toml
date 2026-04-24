@@ -1,29 +1,83 @@
+# ─── Workspace ──────────────────────────────────────────────────────────
+# v0.2 workspace skeleton (issue #1). Until the per-crate moves land
+# (issues #2/#3/#4), the cosaci package below remains the source of
+# truth; the eight workspace members under crates/ and bins/ are
+# stubs reserving their slots.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/cosaci-core",
+    "crates/cosaci-state",
+    "crates/cosaci-protocol",
+    "crates/cosaci-vrf",
+    "crates/cosaci-wasm",
+    "bins/cosaci-coordinator",
+    "bins/cosaci-agent",
+    "bins/cosaci-demo",
+]
+
+[workspace.package]
+version    = "0.2.0-alpha.1"
+edition    = "2024"
+license    = "MIT OR Apache-2.0"
+repository = "https://github.com/copyleftdev/cosaci"
+authors    = ["copyleftdev"]
+
+[workspace.dependencies]
+chacha20poly1305 = "0.10.1"
+ciborium         = "0.2.2"
+ed25519-dalek    = "2.2.0"
+merlin           = "3.0.0"
+rcgen            = "0.14.7"
+rs_merkle        = "1.5.0"
+rustls           = { version = "0.23.39", default-features = false, features = ["ring", "std"] }
+rustls-pemfile   = "2.2.0"
+schnorrkel       = "0.11.5"
+serde            = { version = "1.0.228", features = ["derive"] }
+serde-big-array  = "0.5.1"
+sha2             = "0.11.0"
+wasmtime         = { version = "44.0.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
+criterion        = { version = "0.8.2", features = ["html_reports"] }
+hegeltest        = "0.8.0"
+rand             = "0.10.1"
+rand_chacha      = "0.10.0"
+
+# ─── Root package: cosaci v0.1.0 ────────────────────────────────────────
+# Stays as the source of truth until issues #2/#3/#4 redistribute the
+# modules into the workspace members above. Tests, binaries, and
+# benches all live here for now.
+
 [package]
-name = "cosaci"
-version = "0.1.0"
-edition = "2024"
+name        = "cosaci"
+version     = "0.1.0"
+edition     = "2024"
+license     = "MIT OR Apache-2.0"
+repository  = "https://github.com/copyleftdev/cosaci"
+description = "Distributed attested CI mesh — property-tested at every layer (v0.1)"
+publish     = false
 
 [dependencies]
-chacha20poly1305 = "0.10.1"
-ciborium = "0.2.2"
-ed25519-dalek = "2.2.0"
-merlin = "3.0.0"
-rcgen = "0.14.7"
-rs_merkle = "1.5.0"
-rustls = { version = "0.23.39", default-features = false, features = ["ring", "std"] }
-rustls-pemfile = "2.2.0"
-schnorrkel = "0.11.5"
-serde = { version = "1.0.228", features = ["derive"] }
-serde-big-array = "0.5.1"
-sha2 = "0.11.0"
-wasmtime = { version = "44.0.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
+chacha20poly1305 = { workspace = true }
+ciborium         = { workspace = true }
+ed25519-dalek    = { workspace = true }
+merlin           = { workspace = true }
+rcgen            = { workspace = true }
+rs_merkle        = { workspace = true }
+rustls           = { workspace = true }
+rustls-pemfile   = { workspace = true }
+schnorrkel       = { workspace = true }
+serde            = { workspace = true }
+serde-big-array  = { workspace = true }
+sha2             = { workspace = true }
+wasmtime         = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
-hegeltest = "0.8.0"
-rand = "0.10.1"
-rand_chacha = "0.10.0"
+criterion   = { workspace = true }
+hegeltest   = { workspace = true }
+rand        = { workspace = true }
+rand_chacha = { workspace = true }
 
 [[bench]]
-name = "hot_paths"
+name    = "hot_paths"
 harness = false

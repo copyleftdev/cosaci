@@ -1,0 +1,9 @@
+[package]
+name        = "cosaci-core"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI: pure algebra + crypto primitives (stub — modules arrive in #2)"
+publish     = false
