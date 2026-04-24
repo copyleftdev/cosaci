@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use sha2::{Digest, Sha256};
 
+use crate::signing::{verify as sig_verify, Keypair, Signature, VerifyingKey};
+
 /// Result of a job as attested by a runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -79,4 +81,33 @@ pub fn hash(a: &Attestation) -> [u8; 32] {
 /// encoding of an `Attestation`.
 pub fn decanonicalize(bytes: &[u8]) -> Result<Attestation, ciborium::de::Error<std::io::Error>> {
     ciborium::from_reader(bytes)
+}
+
+impl Attestation {
+    /// Canonical byte encoding of this attestation with the signature
+    /// field zeroed out. This is the message that gets signed — the
+    /// signature cannot cover itself.
+    #[must_use]
+    pub fn canonical_signing_input(&self) -> Vec<u8> {
+        let mut tmp = self.clone();
+        tmp.signature = [0_u8; 64];
+        canonicalize(&tmp)
+    }
+
+    /// Sign this attestation in place. Overwrites the `signature` field
+    /// with an Ed25519 signature over `canonical_signing_input`.
+    pub fn sign_with(&mut self, kp: &Keypair) {
+        let msg = self.canonical_signing_input();
+        let sig = kp.sign(&msg);
+        self.signature = sig.to_bytes();
+    }
+
+    /// Verify this attestation's signature against `pk`. Returns `true`
+    /// iff `pk` produced the signature over `canonical_signing_input`.
+    #[must_use]
+    pub fn verify_signature(&self, pk: &VerifyingKey) -> bool {
+        let msg = self.canonical_signing_input();
+        let sig = Signature::from_bytes(&self.signature);
+        sig_verify(pk, &msg, &sig).is_ok()
+    }
 }
