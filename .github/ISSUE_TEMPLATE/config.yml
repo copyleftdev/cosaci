@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Architecture overview
+    url: https://github.com/copyleftdev/cosaci/blob/main/docs/ARCHITECTURE.md
+    about: How the pieces fit together.
+  - name: Spec (SPEC.md)
+    url: https://github.com/copyleftdev/cosaci/blob/main/SPEC.md
+    about: The falsifiable specification.
+  - name: Hypothesis cards
+    url: https://github.com/copyleftdev/cosaci/blob/main/hypotheses/index.md
+    about: Property-test audit trail — every spec claim is here.

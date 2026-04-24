@@ -1,0 +1,118 @@
+# Importable label definitions for github-label-sync.
+# Usage: github-label-sync --access-token $GITHUB_TOKEN --labels .github/labels.yml copyleftdev/cosaci
+
+- name: kind/bug
+  color: d73a4a
+  description: Something isn't working
+
+- name: kind/feat
+  color: a2eeef
+  description: New feature or capability
+
+- name: kind/refactor
+  color: f9d0c4
+  description: Code restructure with no behavior change
+
+- name: kind/chore
+  color: fef2c0
+  description: Build / tooling / dep maintenance
+
+- name: kind/docs
+  color: "0075ca"
+  description: Documentation
+
+- name: kind/test
+  color: bfd4f2
+  description: Tests / fixtures / harnesses
+
+- name: kind/perf
+  color: f7c6c7
+  description: Performance
+
+- name: priority/P0
+  color: b60205
+  description: Blocker — drop everything
+
+- name: priority/P1
+  color: d93f0b
+  description: Must ship in current milestone
+
+- name: priority/P2
+  color: fbca04
+  description: Should ship in current milestone
+
+- name: priority/P3
+  color: "0e8a16"
+  description: Nice to have / next milestone
+
+- name: area/core
+  color: 5319e7
+  description: Pure algebra + crypto primitives
+
+- name: area/state
+  color: 5319e7
+  description: Stateful subsystems
+
+- name: area/protocol
+  color: 5319e7
+  description: Wire protocol + transport
+
+- name: area/vrf
+  color: 5319e7
+  description: VRF subsystem
+
+- name: area/wasm
+  color: 5319e7
+  description: WASM runtime
+
+- name: area/coordinator
+  color: 1d76db
+  description: Coordinator binary
+
+- name: area/agent
+  color: 1d76db
+  description: Agent binary
+
+- name: area/demo
+  color: 1d76db
+  description: Demo binaries
+
+- name: area/bin
+  color: 1d76db
+  description: Cross-binary concerns
+
+- name: area/ci
+  color: c5def5
+  description: CI workflows
+
+- name: area/build
+  color: c5def5
+  description: Build / clippy / cargo deny
+
+- name: area/release
+  color: c5def5
+  description: Versioning / changelog / publish
+
+- name: status/blocked
+  color: "000000"
+  description: Blocked on something else
+
+- name: status/in-progress
+  color: fbca04
+  description: Active work
+
+- name: status/needs-review
+  color: "0e8a16"
+  description: Waiting on review
+
+- name: good first issue
+  color: 7057ff
+  description: Suitable for newcomers
+
+- name: help wanted
+  color: "008672"
+  description: Needs help to land
+
+- name: flaky
+  color: e99695
+  description: Test fails intermittently

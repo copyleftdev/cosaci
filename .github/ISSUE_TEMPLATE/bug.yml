@@ -1,0 +1,75 @@
+name: Bug report
+description: Something is wrong with the implementation or a Hegel property has been falsified.
+title: "[bug] "
+labels: ["kind/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. Before submitting:
+        - Confirm the failure reproduces on `main`.
+        - If a Hegel test failed, paste the **shrunk counterexample** —
+          the small input the property database recorded.
+        - If you can identify which `hypotheses/<id>.md` card is
+          implicated, please reference it.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What broke
+      description: One sentence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: |
+        Concrete steps. If this is a Hegel shrink, include the
+        counterexample as printed by the runner.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: input
+    id: card
+    attributes:
+      label: Implicated hypothesis card (if known)
+      description: e.g., `hypotheses/quorum-math.md`
+    validations:
+      required: false
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / version
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: |
+        Rust version, OS, anything notable about the host.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0 (blocker)
+        - P1 (must fix this milestone)
+        - P2 (should fix this milestone)
+        - P3 (next milestone)
+    validations:
+      required: true

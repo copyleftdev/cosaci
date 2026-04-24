@@ -1,0 +1,55 @@
+name: Feature / capability
+description: New feature, primitive, or capability.
+title: "[feat] "
+labels: ["kind/feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New features should usually start with a hypothesis card so
+        the property surface is defined before the code lands. If
+        this feature affects a claim from `SPEC.md`, link the section.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why does this feature need to exist?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: |
+        What's the API / behavior change? If a new primitive, sketch
+        the data shapes and entry points.
+    validations:
+      required: true
+
+  - type: textarea
+    id: claims
+    attributes:
+      label: Falsifiable claims
+      description: |
+        What properties does this feature promise? These become the
+        Hegel test surface. If you'd like a hypothesis card created,
+        say so explicitly.
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: SPEC.md sections affected
+      description: e.g., §5.3, §8.1, or "new section needed for X"
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P1 (must ship this milestone)
+        - P2 (should ship this milestone)
+        - P3 (next milestone)
+    validations:
+      required: true

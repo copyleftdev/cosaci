@@ -1,0 +1,44 @@
+name: Refactor / chore
+description: Code restructure with no behavior change, or a build / tooling / dep task.
+title: "[refactor] "
+labels: ["kind/refactor"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: One-paragraph summary of what changes shape but not behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: justification
+    attributes:
+      label: Why now
+      description: |
+        What concrete problem does this solve? "It feels cleaner" is
+        not enough — name the future task this unblocks or the
+        ergonomics regression it fixes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: blast_radius
+    attributes:
+      label: Blast radius
+      description: |
+        Which crates / modules are touched? Is the public API
+        affected? Is there a measurable build-time impact?
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How will we verify nothing regressed
+      description: |
+        Test plan. For pure refactors, "all existing tests still
+        green" is usually enough; for chores like dep bumps, also
+        run `cargo deny check`, `cargo audit`, etc.
+    validations:
+      required: true
