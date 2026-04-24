@@ -2,8 +2,13 @@
 id: real-runtime-determinism
 source: SPEC.md §6.1b
 class: C
-status: pending
-blocked_on: "real runtime harness (WASM/WASI runtime + Firecracker microVM + optional Docker)"
+status: passing
+test: tests/real_runtime_determinism.rs
+depends_on: "wasmtime 44 (cranelift + wat + runtime features)"
+primitive_pick: "Canned WAT module (`add(i32, i32) -> i32`) executed via wasmtime::Engine/Module/Instance/Store; output hashed with SHA-256. Each call constructs a fresh Engine so engine-level state cannot leak across runs."
+first_passing: 2026-04-24
+note: "WASM subset closed. Four properties green: deterministic-across-repeats, matches-native-wrapping-semantics, different-results-give-different-hashes, fresh-engines-agree."
+sub_claim_deferred: "Firecracker + Docker runtime determinism. Both require system-level infra (KVM for Firecracker, dockerd for Docker) not accessible in the filter's test environment. Pattern from the wasmtime harness carries over; open a matching harness module + test when those runtimes become the target sandbox."
 ---
 
 # real-runtime-determinism

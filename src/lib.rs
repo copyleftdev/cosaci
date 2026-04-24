@@ -27,5 +27,7 @@ pub mod sharding;
 pub mod sharding_handoff;
 pub mod signing;
 pub mod status;
+pub mod tls;
 pub mod verifier;
 pub mod vrf;
+pub mod wasm_runtime;
