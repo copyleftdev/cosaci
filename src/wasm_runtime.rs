@@ -46,6 +46,6 @@ pub fn execute_add(a: i32, b: i32) -> Result<i32, String> {
 #[must_use]
 pub fn output_hash(result: i32) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(&result.to_le_bytes());
+    hasher.update(result.to_le_bytes());
     hasher.finalize().into()
 }

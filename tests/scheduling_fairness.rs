@@ -31,7 +31,7 @@ fn pick_winner(job_seed: &[u8; 32], n_runners: usize) -> usize {
     for i in 0..n_runners {
         let mut hasher = Sha256::new();
         hasher.update(job_seed);
-        hasher.update(&(i as u64).to_le_bytes());
+        hasher.update((i as u64).to_le_bytes());
         let h: [u8; 32] = hasher.finalize().into();
         if h < min_hash {
             min_hash = h;

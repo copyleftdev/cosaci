@@ -213,7 +213,7 @@ fn main() {
         .iter()
         .map(|id| coord.stake.get(id).copied().unwrap_or(0))
         .sum();
-    let threshold = (committee_stake * 2 + 2) / 3; // ceil(2*stake/3)
+    let threshold = (committee_stake * 2).div_ceil(3); // ceil(2*stake/3)
     let outcome = aggregate(&verified_votes, threshold, &coord.stake);
     println!(
         "▸ Quorum: threshold {} (committee stake {}), outcome {:?}",

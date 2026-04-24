@@ -130,10 +130,10 @@ fn main() -> std::io::Result<()> {
 }
 
 fn arg_or(args: &[String], flag: &str, default: &str) -> String {
-    if let Some(pos) = args.iter().position(|a| a == flag) {
-        if let Some(v) = args.get(pos + 1) {
-            return v.clone();
-        }
+    if let Some(pos) = args.iter().position(|a| a == flag)
+        && let Some(v) = args.get(pos + 1)
+    {
+        return v.clone();
     }
     default.to_string()
 }

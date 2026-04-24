@@ -117,11 +117,11 @@ impl<C: Clock> LeaseManager<C> {
     /// (no late revival).
     pub fn complete(&mut self, lease_id: LeaseId) {
         self.tick();
-        if let Some(lease) = self.leases.get_mut(&lease_id) {
-            if matches!(lease.state, LeaseState::Active) {
-                lease.state = LeaseState::Completed;
-                self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
-            }
+        if let Some(lease) = self.leases.get_mut(&lease_id)
+            && matches!(lease.state, LeaseState::Active)
+        {
+            lease.state = LeaseState::Completed;
+            self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
         }
     }
 

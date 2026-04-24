@@ -30,7 +30,7 @@ const TOLERANCE: f64 = 0.015;
 fn score(seed: &[u8; 32], runner: usize) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(seed);
-    h.update(&(runner as u64).to_le_bytes());
+    h.update((runner as u64).to_le_bytes());
     h.finalize().into()
 }
 

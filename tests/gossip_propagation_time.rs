@@ -30,8 +30,8 @@ fn simulate_push_gossip(n: usize, fanout: usize, rng: &mut ChaCha8Rng) -> usize 
     let max_rounds = n * 4;
     while !infected.iter().all(|&b| b) && rounds < max_rounds {
         let mut new_this_round = vec![false; n];
-        for i in 0..n {
-            if !infected[i] {
+        for (i, &is_infected) in infected.iter().enumerate() {
+            if !is_infected {
                 continue;
             }
             for _ in 0..fanout {
