@@ -12,6 +12,37 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — GitHub Checks API contract via fixture replay (#38, partial)
+
+- New `cosaci-state::github_checks` module:
+  `CheckRunPayload`, `CheckStatus`, `CheckConclusion`,
+  `CheckOutput`, `JobContext`.
+- `status_to_check_status(Status)` — pure mapping from
+  `cosaci-core::status::Status` (Pending / Running /
+  QuorumVerifying / Success / Failure) to GitHub's
+  `(status, conclusion)` pair.
+- `build_payload(Status, &JobContext)` — full payload assembly
+  matching GitHub's documented schema for
+  `POST /repos/{owner}/{repo}/check-runs`.
+- Fixtures under `tests/fixtures/github_checks/{pending,running,
+  quorum_verifying,success,failure}.json` capture one canonical
+  JSON per lifecycle state. The 14-test fixture-replay suite at
+  `tests/github_checks_fixtures.rs` asserts the transformation
+  matches each fixture; any change that breaks the schema
+  (renamed field, missing required key, wrong serialization tag)
+  fails at PR time without a live GitHub API call.
+- `hypotheses/github-checks-integration.md` moves from `pending`
+  to `passing` (class D, Tier 4 boundary card). Tier 4 is now
+  3/3 passing. Total audit trail: 39 cards · 37 passing.
+- New `serde_json` workspace dep (1.0.128) for the fixture
+  comparison; `cosaci-state` depends on `serde` directly.
+- **Out of scope (follow-on):** the actual coordinator-side
+  HTTP publishing path (POST to api.github.com on every status
+  transition). That's class C live-API; it lands as a
+  `/schedule`-able weekly routine against a real test GitHub
+  org once an App token is provisioned. Webhook ingestion is
+  tracked under #52.
+
 ### Added — `cosaci-admin` CLI (#53, partial)
 
 - New `bins/cosaci-admin/` workspace member with binary

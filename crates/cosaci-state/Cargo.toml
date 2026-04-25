@@ -13,6 +13,7 @@ publish     = false
 
 [dependencies]
 cosaci-core = { path = "../cosaci-core" }
+serde       = { workspace = true }
 sha2        = { workspace = true }
 
 [lints]
