@@ -103,6 +103,7 @@ hegeltest        = "0.8.0"
 rand             = "0.10.1"
 rand_chacha      = "0.10.0"
 signal-hook      = "0.3.18"
+tempfile         = "3.21"
 time             = { version = "0.3", default-features = false, features = ["std"] }
 
 # ─── Root package: cosaci v0.1.0 ────────────────────────────────────────
@@ -142,6 +143,7 @@ hegeltest   = { workspace = true }
 rand        = { workspace = true }
 rand_chacha = { workspace = true }
 sha2        = { workspace = true }
+tempfile    = { workspace = true }
 
 [[bench]]
 name    = "hot_paths"

@@ -26,7 +26,7 @@ use cosaci_core::attestation::AttestationResult;
 use cosaci_core::capabilities::{
     Candidate, Capabilities, JobRequirements, Platform, Runtime, select_capability_aware_committee,
 };
-use cosaci_core::merkle_log::MerkleLog;
+use cosaci_core::merkle_log::{FileStore, MerkleLog};
 use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
@@ -73,6 +73,11 @@ fn main() -> std::io::Result<()> {
     let max_jobs: u64 = arg_or(&args, "--max-jobs", &u64::MAX.to_string())
         .parse()
         .expect("max-jobs u64");
+    // `--log <path>` selects the file-backed Merkle log (issue #33).
+    // Empty (default) means in-memory: the log is reset on every start.
+    // A non-empty path opens (or creates) that file as an append-only
+    // 32-bytes-per-entry log; restart recovers prior anchors.
+    let log_path = arg_or(&args, "--log", "");
 
     // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
     let draining = Arc::new(AtomicBool::new(false));
@@ -117,7 +122,16 @@ fn main() -> std::io::Result<()> {
     };
 
     // ── Phase 2: persistent job loop ───────────────────────────────────────
-    let mut log = MerkleLog::new();
+    let mut log = if log_path.is_empty() {
+        LogBackend::Mem(MerkleLog::new())
+    } else {
+        let file_log = MerkleLog::<FileStore>::open(&log_path)?;
+        println!(
+            "[coordinator] Merkle log path: {log_path} ({} entries on disk)",
+            file_log.len()
+        );
+        LogBackend::File(file_log)
+    };
     let mut completed: u64 = 0;
 
     while completed < max_jobs && !draining.load(Ordering::Relaxed) {
@@ -262,7 +276,7 @@ fn run_one_job(
     log_module: &[u8],
     agents: &mut [RegisteredAgent],
     stake_map: &StakeMap,
-    log: &mut MerkleLog,
+    log: &mut LogBackend,
 ) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
     // log_module is the leading WASM module bytes — used only for the
@@ -438,7 +452,7 @@ fn run_one_job(
     );
 
     if outcome == Outcome::Pass {
-        let pos = log.append(consensus_artifact);
+        let pos = log.append(consensus_artifact)?;
         let root = log.root().expect("nonempty");
         println!(
             "[coordinator] job {} anchored at position {} root {:02x?}…",
@@ -541,4 +555,29 @@ fn now_unix_ns() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
+}
+
+/// Enum-dispatched Merkle log backend. The coordinator's caller picks
+/// at startup based on `--log <path>`; the rest of the loop is
+/// agnostic. Both arms expose the same `(append, root)` surface the
+/// coordinator needs.
+enum LogBackend {
+    Mem(MerkleLog),
+    File(MerkleLog<FileStore>),
+}
+
+impl LogBackend {
+    fn append(&mut self, entry: cosaci_core::merkle_log::Hash) -> std::io::Result<u64> {
+        match self {
+            Self::Mem(l) => Ok(l.append(entry)),
+            Self::File(l) => l.append(entry),
+        }
+    }
+
+    fn root(&self) -> Option<cosaci_core::merkle_log::Hash> {
+        match self {
+            Self::Mem(l) => l.root(),
+            Self::File(l) => l.root(),
+        }
+    }
 }
