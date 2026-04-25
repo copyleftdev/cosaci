@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI: stateful subsystems (leases, registries, partitions, sharding)"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "lease", "sharding", "partition"]
+categories  = ["data-structures", "concurrency"]
 publish     = false
 
 [dependencies]

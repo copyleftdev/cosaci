@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI: WebAssembly runtime harness (wasmtime, cranelift)"
+readme      = "../../README.md"
+keywords    = ["wasm", "webassembly", "wasmtime", "sandbox", "cranelift"]
+categories  = ["wasm"]
 publish     = false
 
 [dependencies]

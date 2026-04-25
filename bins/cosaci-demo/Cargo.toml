@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI single-process and networked demo runners — the smoke test for the full mesh"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "demo", "smoke-test", "mtls"]
+categories  = ["command-line-utilities", "development-tools::testing"]
 publish     = false
 
 [dependencies]

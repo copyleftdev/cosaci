@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI: wire protocol (CBOR envelopes) + mTLS transport (rustls)"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "mtls", "rustls", "cbor"]
+categories  = ["network-programming", "encoding"]
 publish     = false
 
 [dependencies]

@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI coordinator binary — accepts agent attestations, runs quorum, anchors to Merkle log"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "coordinator", "quorum", "attestation"]
+categories  = ["command-line-utilities", "network-programming"]
 publish     = false
 
 [dependencies]

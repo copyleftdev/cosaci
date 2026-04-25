@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI: pure algebra + crypto primitives — no I/O, no network"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "crypto", "merkle", "consensus"]
+categories  = ["cryptography", "data-structures"]
 publish     = false
 
 [dependencies]
