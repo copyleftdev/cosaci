@@ -32,6 +32,7 @@ use cosaci_core::retrieval::{JobRecord, build_bundle};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
+use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
@@ -84,6 +85,24 @@ fn main() -> std::io::Result<()> {
     // bind a second TLS listener on that addr and serve `GetJob` /
     // `GetLogRoot` requests against the live job registry + log.
     let read_addr = arg_or(&args, "--read-addr", "");
+    // `--enrollment <path>` enables the agent-enrollment gate
+    // (issue #45). Empty means disabled — every mTLS-/VRF-valid
+    // registration is accepted (current behavior). Non-empty: load
+    // the enrollment file at startup and reject any agent whose
+    // `(runner_id, signing_fp, vrf_fp)` triple isn't on the list.
+    let enrollment_path = arg_or(&args, "--enrollment", "");
+
+    let enrollment: Option<Arc<EnrollmentSet>> = if enrollment_path.is_empty() {
+        None
+    } else {
+        let set = EnrollmentSet::load_from_path(&enrollment_path)?;
+        println!(
+            "[coordinator] enrollment gate enabled ({} runner(s) loaded from {})",
+            set.len(),
+            enrollment_path
+        );
+        Some(Arc::new(set))
+    };
 
     // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
     let draining = Arc::new(AtomicBool::new(false));
@@ -104,7 +123,7 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&addr)?;
 
     // ── Phase 1: accept fleet + verify registration VRF proofs ─────────────
-    let mut agents = accept_fleet(&listener, &shared_cfg, fleet)?;
+    let mut agents = accept_fleet(&listener, &shared_cfg, fleet, enrollment.as_deref())?;
     let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
     println!(
         "[coordinator] fleet assembled ({} agents, all VRF-attested)",
@@ -213,6 +232,7 @@ fn accept_fleet(
     listener: &TcpListener,
     shared_cfg: &SharedServerConfig,
     fleet: u64,
+    enrollment: Option<&EnrollmentSet>,
 ) -> std::io::Result<Vec<RegisteredAgent>> {
     let mut agents: Vec<RegisteredAgent> = Vec::with_capacity(fleet as usize);
     while agents.len() < fleet as usize {
@@ -261,6 +281,25 @@ fn accept_fleet(
         ) {
             eprintln!("[coordinator] dropping {peer}: registration VRF proof rejected ({e:?})");
             continue;
+        }
+
+        // Enrollment gate (issue #45). After mTLS + VRF-of-possession,
+        // the operator's enrollment list is the final say on whether
+        // this runner is allowed in the trust set. Empty list = gate
+        // disabled (legacy behavior).
+        if let Some(set) = enrollment {
+            let signing_fp = fingerprint(&signing_pubkey);
+            let vrf_fp = fingerprint(&vrf_pubkey);
+            if !set.is_enrolled(runner_id, &signing_fp, &vrf_fp) {
+                eprintln!(
+                    "[coordinator] rejecting unenrolled agent runner_id={} from {} (signing_fp={}, vrf_fp={})",
+                    runner_id,
+                    peer,
+                    fingerprint_hex(&signing_fp),
+                    fingerprint_hex(&vrf_fp)
+                );
+                continue;
+            }
         }
 
         let signing_pk = match VerifyingKey::from_bytes(&signing_pubkey) {

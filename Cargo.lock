@@ -367,6 +367,7 @@ dependencies = [
  "cosaci-core",
  "cosaci-jobs",
  "cosaci-protocol",
+ "cosaci-state",
  "cosaci-vrf",
  "cosaci-wasm",
  "rustls",
@@ -430,6 +431,7 @@ name = "cosaci-state"
 version = "0.2.0"
 dependencies = [
  "cosaci-core",
+ "sha2 0.11.0",
 ]
 
 [[package]]
