@@ -1,0 +1,19 @@
+# Pinned toolchain for cosaCI (issue #13).
+#
+# Rustup automatically respects this file: any `cargo` / `rustc`
+# invocation in the workspace switches to this exact toolchain. CI
+# uses the same file, which means the maintainer's local builds and
+# the CI builds run against identical compiler versions — no "works
+# on my machine" toolchain drift, and no implicit MSRV creep when a
+# new stable lands.
+#
+# Bumping this version is a deliberate choice; bump it when the code
+# starts using a stabilization that lands in a newer release. The
+# components list keeps `rustfmt` and `clippy` pinned alongside the
+# compiler, so contributors don't need to remember to install them
+# separately.
+
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

@@ -26,11 +26,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `rust-toolchain.toml` at the repo root pins the toolchain and
+      # installs `rustfmt` + `clippy` automatically; rustup respects it
+      # on the next cargo invocation. No explicit setup-rust-toolchain
+      # action is needed.
       - name: Show Rust toolchain
         run: |
           rustc --version
           cargo --version
-          rustup component add rustfmt clippy
+          rustup show
 
       - name: Cache Cargo + target
         uses: Swatinem/rust-cache@v2
@@ -42,8 +46,9 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      # Clippy gate. Initially -D warnings only; tighten to
-      # `-D clippy::pedantic` once v0.2 issue #9 lands.
+      # Clippy gate. Pedantic is wired through `[workspace.lints.clippy]`
+      # at warn level (issue #9); `-D warnings` escalates each finding
+      # to an error at this CI step.
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
