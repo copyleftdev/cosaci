@@ -1,0 +1,28 @@
+# cosaCI — rustfmt configuration (stable-only options).
+#
+# CI runs `cargo fmt --all -- --check`; this file makes the policy
+# explicit so a different host toolchain can't quietly disagree about
+# the canonical formatting.
+#
+# Only stable rustfmt options are listed below. Nightly-only knobs
+# (imports_granularity, group_imports, etc.) are intentionally avoided —
+# every contributor must be able to produce the canonical formatting
+# from a stock stable toolchain without nightly.
+
+# Use Rust 2024 edition formatting rules. Without this, rustfmt picks
+# the edition from each crate's Cargo.toml individually, which is
+# surprising when files outside a crate (e.g. examples or scratch
+# scripts) get formatted differently from crate code.
+edition = "2024"
+
+# 100-column wrap. Same as the default; pinned for documentation.
+max_width = 100
+
+# Match the workspace's existing tabs/spaces convention. Defaults; pinned.
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+
+# Prefer concise idioms where rustfmt can apply them safely on stable.
+use_field_init_shorthand = true
+use_try_shorthand = true
