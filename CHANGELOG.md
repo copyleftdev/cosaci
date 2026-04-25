@@ -12,6 +12,35 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — `cosaci-admin` CLI (#53, partial)
+
+- New `bins/cosaci-admin/` workspace member with binary
+  `cosaci-admin`. Filesystem-only for v0.3 — operates directly
+  against the enrollment file and the persistent Merkle log;
+  does NOT yet talk to a running coordinator over TLS.
+- Subcommands:
+  - `agents list --enrollment <path>` — print the enrollment
+    file as a sorted table.
+  - `agents enroll --enrollment <path> --runner-id N
+    --signing-fp <hex> --vrf-fp <hex> [--reputation 0..1]
+    [--at <unix_ns>]` — append a record. Refuses if `runner_id`
+    is already enrolled (use `revoke` first to replace).
+  - `agents revoke --enrollment <path> --runner-id N` — remove
+    a record.
+  - `log root --log <path>` — open the file-backed Merkle log
+    (issue #33) and print its current root + length.
+- All file mutations are atomic: write tempfile + rename. An
+  interrupted run leaves either the original or the new file,
+  never half-written.
+- `cosaci-state::enrollment::EnrollmentSet::iter()` (new) so the
+  CLI can produce sorted-by-runner_id output deterministically.
+- RUNBOOK §2 (Adding a runner) updated to use the CLI; the
+  "manual file edits" gap is closed for the v0.3 deployment path.
+- **Out of scope (follow-on):** wire-protocol Admin* envelopes
+  + AuthN gate (depends on #46), `tenants {add,list,revoke}`,
+  `jobs {list,inspect}`, `system status`. Those need the wire
+  path and the AuthN token format.
+
 ### Added — network egress policy evaluation (#54, partial)
 
 - `cosaci-jobs::network` (new module): `NetworkPolicy { allow,
