@@ -33,6 +33,7 @@ use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
 use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
+use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_state, replay};
 use cosaci_state::stake_ledger::StakeLedger;
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
@@ -101,6 +102,14 @@ fn main() -> std::io::Result<()> {
     // the enrollment file at startup and reject any agent whose
     // `(runner_id, signing_fp, vrf_fp)` triple isn't on the list.
     let enrollment_path = arg_or(&args, "--enrollment", "");
+    // `--journal <path>` enables crash-recovery journaling
+    // (issue #51). Empty means disabled — no journal writes. Non-
+    // empty: append one NDJSON line per state transition with fsync.
+    // On startup, the journal is replayed and the per-job-state
+    // summary is logged for the operator. v0.3 doesn't yet re-run
+    // pending jobs from the journal — that's a follow-on once #32
+    // (job submission) carries the source-of-job into recovery.
+    let journal_path = arg_or(&args, "--journal", "");
     // `--slash-fraction <f>` controls how much stake a runner loses
     // when their attestation diverges from the consensus artifact
     // (issue #35). Default 0.25 (== stake / 4 per the issue spec).
@@ -119,6 +128,42 @@ fn main() -> std::io::Result<()> {
             enrollment_path
         );
         Some(Arc::new(set))
+    };
+
+    // Crash-recovery journal (issue #51). Empty path = disabled.
+    // Non-empty: replay first to discover any pre-crash state, log
+    // a summary for the operator, then open the journal for
+    // append. v0.3 logs the recovery summary but does NOT yet re-run
+    // pending jobs (that requires #32's job-source-in-journal work).
+    let journal: Option<Arc<Mutex<Journal>>> = if journal_path.is_empty() {
+        None
+    } else {
+        let entries = replay(&journal_path)?;
+        let state = reconstruct_state(&entries);
+        let pending_run = state.pending_re_run();
+        let pending_anchor = state.pending_re_anchor();
+        let anchored_count = state.anchored_jobs().len();
+        println!(
+            "[coordinator] journal replayed from {}: {} entries, {} previously-anchored job(s), {} pending re-run, {} pending re-anchor",
+            journal_path,
+            entries.len(),
+            anchored_count,
+            pending_run.len(),
+            pending_anchor.len()
+        );
+        if !pending_run.is_empty() {
+            println!(
+                "[coordinator] journal pending re-run job_ids: {:?} (NOT auto-rerun in v0.3 — see #32 + #51 follow-on)",
+                pending_run
+            );
+        }
+        if !pending_anchor.is_empty() {
+            println!(
+                "[coordinator] journal pending re-anchor job_ids: {:?} (NOT auto-anchored in v0.3 — operator triage)",
+                pending_anchor
+            );
+        }
+        Some(Arc::new(Mutex::new(Journal::open(&journal_path)?)))
     };
 
     // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
@@ -224,6 +269,7 @@ fn main() -> std::io::Result<()> {
             runner_timeout_secs,
             &log,
             &records,
+            journal.as_ref(),
         ) {
             Ok(()) => {
                 completed += 1;
@@ -366,7 +412,13 @@ fn run_one_job(
     runner_timeout_secs: u64,
     log: &Arc<Mutex<LogBackend>>,
     records: &Arc<Mutex<HashMap<u64, JobRecord>>>,
+    journal: Option<&Arc<Mutex<Journal>>>,
 ) -> std::io::Result<()> {
+    // Journal: JobSubmitted (issue #51). The internal demo loop
+    // submits jobs in-process, but the lifecycle event is the same
+    // shape as it'll be when #32 lands.
+    journal_append(journal, &JournalEntry::JobSubmitted { job_id });
+
     let job_seed = job_seed_bytes(job_id);
     // log_module is the leading WASM module bytes — used only for the
     // human-readable hash prefix in the log line. Once jobs carry
@@ -466,6 +518,15 @@ fn run_one_job(
         pipeline.steps.len()
     );
 
+    // Journal: CommitteeSelected (issue #51).
+    journal_append(
+        journal,
+        &JournalEntry::CommitteeSelected {
+            job_id,
+            committee: committee.clone(),
+        },
+    );
+
     // ── Phase 2c: broadcast Assign to committee ────────────────────────
     let deadline = now_unix_ns() + 60_000_000_000;
     for ag in agents.iter_mut() {
@@ -539,6 +600,17 @@ fn run_one_job(
             &att.artifact_hash[..4]
         );
         if sig_ok {
+            // Journal: AttestationReceived (issue #51). We only
+            // record signature-valid attestations — a bad-sig
+            // submission is treated like a missing one and surfaces
+            // via the partial-tolerance counter, not the journal.
+            journal_append(
+                journal,
+                &JournalEntry::AttestationReceived {
+                    job_id,
+                    runner_id: ag.runner_id,
+                },
+            );
             attestations.push(att);
         } else {
             // Bad-sig attestation is treated like a missing one for
@@ -588,6 +660,18 @@ fn run_one_job(
     println!(
         "[coordinator] job {} outcome {:?} (threshold {}, committee stake {})",
         job_id, outcome, threshold, committee_stake
+    );
+
+    // Journal: Aggregated (issue #51). Records the outcome + the
+    // consensus artifact hash so a recovering coord knows what to
+    // re-anchor.
+    journal_append(
+        journal,
+        &JournalEntry::Aggregated {
+            job_id,
+            outcome: outcome_to_journal(outcome),
+            artifact_hex: hex_lower(&consensus_artifact),
+        },
     );
 
     // Slashing (issue #35). On a definitive outcome (Pass or Fail),
@@ -640,8 +724,32 @@ fn run_one_job(
             pos,
             &root[..8]
         );
+
+        // Journal: Anchored (issue #51). The terminal entry for a
+        // successful job. A crash between Aggregated and Anchored
+        // leaves the job in `pending_re_anchor`; on recovery, the
+        // operator re-anchors via the read API or admin tooling.
+        journal_append(
+            journal,
+            &JournalEntry::Anchored {
+                job_id,
+                position: pos,
+            },
+        );
     }
     Ok(())
+}
+
+/// Lowercase-hex encoding of a 32-byte hash. Used for journal
+/// records where the operator + parser both want a human-readable
+/// shape.
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        write!(&mut s, "{b:02x}").expect("write to String");
+    }
+    s
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -713,6 +821,37 @@ fn build_server_config(
 // ────────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────────
+
+/// Append a journal entry under the `Arc<Mutex<Journal>>`. A None
+/// journal is a no-op (operator opted out of journaling). Errors
+/// are logged but don't fail the job — the journal is best-effort
+/// observability; the source of truth for "did this job complete"
+/// is the Merkle log.
+fn journal_append(journal: Option<&Arc<Mutex<Journal>>>, entry: &JournalEntry) {
+    let Some(j) = journal else {
+        return;
+    };
+    let mut guard = match j.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("[coordinator] journal mutex poisoned: {e}");
+            return;
+        }
+    };
+    if let Err(e) = guard.append(entry) {
+        eprintln!("[coordinator] journal append failed ({e}) — continuing");
+    }
+}
+
+/// Map `cosaci_core::quorum::Outcome` to the journal's `JournalOutcome`.
+fn outcome_to_journal(o: Outcome) -> JournalOutcome {
+    match o {
+        Outcome::Pass => JournalOutcome::Pass,
+        Outcome::Fail => JournalOutcome::Fail,
+        Outcome::Retry => JournalOutcome::Retry,
+        Outcome::Escalate => JournalOutcome::Escalate,
+    }
+}
 
 fn arg_or(args: &[String], flag: &str, default: &str) -> String {
     if let Some(pos) = args.iter().position(|a| a == flag)
