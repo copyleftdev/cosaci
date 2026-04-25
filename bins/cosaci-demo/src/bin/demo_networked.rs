@@ -142,6 +142,13 @@ fn run_round(
             coord_args.push("--read-addr".into());
             coord_args.push(read_addr.to_string());
         }
+        // Issue #51 follow-on: exercise the journal end-to-end in
+        // the bounded round. The path lives in the per-process temp
+        // dir alongside the demo's certs; demo_networked deletes the
+        // dir on exit.
+        let journal_path = certs.temp_dir.join("journal.ndjson");
+        coord_args.push("--journal".into());
+        coord_args.push(journal_path.to_string_lossy().into_owned());
     }
 
     let mut coord = Command::new(coord_bin)

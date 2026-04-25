@@ -12,6 +12,31 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Changed — journal integrated into coordinator (#51 follow-on)
+
+- Coordinator gains `--journal <path>` flag. Empty (default) =
+  no journaling, current behavior. Non-empty: replay at startup,
+  append per state transition with fsync.
+- Per-transition appends in `run_one_job`: `JobSubmitted` →
+  `CommitteeSelected` → `AttestationReceived` (per signature-valid
+  attestation) → `Aggregated` (with consensus artifact hash) →
+  `Anchored` (with log position).
+- Startup replay logs a recovery summary:
+  `[coordinator] journal replayed from <path>: N entries, X
+  previously-anchored job(s), Y pending re-run, Z pending
+  re-anchor`. Pending lists are logged with explicit "NOT
+  auto-rerun in v0.3" notes — the auto-recovery loop lands once
+  #32 carries job source into the journal.
+- `demo_networked` bounded round now passes `--journal
+  <temp_dir>/journal.ndjson` so the smoke test exercises the
+  full journal lifecycle end-to-end.
+- RUNBOOK §5 (Disaster recovery) gets a new §5d describing the
+  journal-driven recovery procedure.
+- **Out of scope (still follow-on):** auto-rerun of pending jobs
+  on startup (depends on #32's job-source-in-journal),
+  `cosaci-admin anchor` for manual re-anchor of pending-aggregated
+  jobs, checkpoint+truncation (the unbounded-growth mitigation).
+
 ### Added — crash-recovery journal (#51, partial)
 
 - New `cosaci-state::journal` module: `JournalEntry` enum

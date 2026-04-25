@@ -406,9 +406,49 @@ sudo cosaci truncate-log /var/lib/cosaci/attest.log   # PARTIAL — tool not shi
 # sudo truncate -s "$good" /var/lib/cosaci/attest.log
 ```
 
-> **DEFERRED — full DR shipping in #51.** Job-queue durability +
-> mid-job journal recovery lands with issue #51. For v0.3,
-> resubmit lost jobs from upstream.
+### 5d. Journal-driven recovery (issue #51)
+
+The coordinator's `--journal <path>` flag enables a per-transition
+crash-recovery journal (NDJSON, fsync per record). Every
+externally-visible state change — `JobSubmitted` →
+`CommitteeSelected` → `AttestationReceived` → `Aggregated` →
+`Anchored` — is appended one line at a time.
+
+```bash
+# Enable journaling. Place it on the same filesystem as the
+# Merkle log so the two are consistent under crash.
+sudo install -d -o cosaci -g cosaci /var/lib/cosaci
+echo "COSACI_JOURNAL=/var/lib/cosaci/journal.ndjson" \
+    | sudo tee -a /etc/cosaci/coordinator.env
+sudo systemctl restart cosaci-coordinator
+```
+
+On startup, the coordinator replays the journal and logs:
+
+```
+[coordinator] journal replayed from /var/lib/cosaci/journal.ndjson:
+    137 entries, 28 previously-anchored job(s),
+    0 pending re-run, 0 pending re-anchor
+```
+
+If `pending re-run` or `pending re-anchor` is non-zero, the
+operator follows up:
+
+- **Pending re-anchor:** `cosaci-admin log root` to confirm the
+  artifact isn't already in the Merkle log; if not, the artifact
+  hash from the journal's `Aggregated` line is the consensus value
+  to anchor manually (a `cosaci-admin anchor` subcommand lands as
+  follow-on to #51).
+- **Pending re-run:** v0.3 doesn't yet auto-rerun pending jobs
+  because the original job source isn't carried in the journal
+  (the rotation between canned `add` / `mul` is in-process). Once
+  #32 (job submission CLI) lands, submitted jobs include their
+  source bytes in the journal and recovery becomes automatic.
+
+> **PARTIAL — auto-recovery deferred.** v0.3 reports the recovery
+> state but does not yet re-run pending jobs or re-anchor pending
+> aggregations automatically. Issue #51 follow-on + #32 will close
+> the loop.
 
 ---
 
