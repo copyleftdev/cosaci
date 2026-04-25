@@ -10,6 +10,7 @@
 pub mod aggregator;
 pub mod enrollment;
 pub mod lease;
+pub mod partial_quorum;
 pub mod partition;
 pub mod rate_limit;
 pub mod registry;

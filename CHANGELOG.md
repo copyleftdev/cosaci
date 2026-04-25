@@ -12,6 +12,37 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — partial committee tolerance (#61)
+
+- New `cosaci-state::partial_quorum` module: `PartialOutcome`,
+  `resolve_with_dropouts(committee, votes_subset, stake_map,
+  threshold_fn) -> PartialOutcome`. Pure: returns
+  `(outcome, responding, missing, responding_stake, threshold)`.
+  Threshold is computed against responding-subset stake (NOT
+  full-committee stake), so a 2/3-weighted majority of who actually
+  showed up is the right bar.
+- Convenience helpers: `two_thirds_threshold(s) = ceil(s × 2 / 3)`
+  and `stake_map_from_pairs(...)`.
+- Coordinator integration: per-runner read deadline via
+  `set_read_timeout` in the attestation collection loop. A runner
+  that doesn't return `SubmitAttestation` within the deadline is
+  recorded as missing (logged at `[coordinator] job N runner R
+  attestation timeout after Ts — recorded as missing`); the
+  responding subset still aggregates to a deterministic outcome.
+  Replaces the historical `?`-bail-on-IO-error behavior that
+  turned every dropped TCP connection into a job failure.
+- New `--runner-timeout-secs <s>` flag (default 30) controls the
+  per-runner deadline.
+- New hypothesis card `hypotheses/partial-committee-tolerance.md`
+  (class A, Tier 0). Five Hegel properties + 1 smoke test:
+  responding/missing partition the committee, outcome equals
+  subset aggregate, single-failure tolerance for k=3, threshold
+  uses responding-subset stake (catches the silent-fail bug),
+  empty response doesn't panic.
+- **Out of scope (follow-on):** the `MissingAttestation`
+  reputation decrement (`δ_miss = δ_disagree / 4` per the issue)
+  lands when reputation/stake separation lands.
+
 ### Added — slashing on detected dishonest attestation (#35)
 
 - New `cosaci-state::stake_ledger` module: `StakeLedger`,
