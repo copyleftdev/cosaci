@@ -10,8 +10,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cosaci::sharding::{shard_of, Key, ShardedStore, Value};
-use hegel::{generators, TestCase};
+use cosaci::sharding::{Key, ShardedStore, Value, shard_of};
+use hegel::{TestCase, generators};
 
 // ============================================================================
 // Pointwise properties
@@ -84,7 +84,11 @@ fn rebalance_loses_no_keys(tc: hegel::TestCase) {
     store.rebalance(n2);
 
     assert_eq!(store.n_shards(), n2);
-    assert_eq!(store.len(), model.len(), "cardinality changed under rebalance");
+    assert_eq!(
+        store.len(),
+        model.len(),
+        "cardinality changed under rebalance"
+    );
     for (&k, &v) in &model {
         assert_eq!(
             store.get(k),
@@ -180,7 +184,11 @@ fn shard_distribution_is_not_catastrophic(tc: hegel::TestCase) {
     // Also: no shard should be entirely empty with 100 keys into 4 shards.
     // Probability a specific shard is empty under uniform = (3/4)^100 ≈ 3e-13.
     let empty = counts.iter().filter(|&&c| c == 0).count();
-    assert_eq!(empty, 0, "empty shard under 100 distinct keys: {:?}", counts);
+    assert_eq!(
+        empty, 0,
+        "empty shard under 100 distinct keys: {:?}",
+        counts
+    );
 }
 
 // ============================================================================
@@ -197,11 +205,7 @@ impl ShardTest {
     // Put a key/value. Last-write-wins.
     #[rule]
     fn put(&mut self, tc: TestCase) {
-        let k = tc.draw(
-            generators::integers::<Key>()
-                .min_value(0)
-                .max_value(100),
-        );
+        let k = tc.draw(generators::integers::<Key>().min_value(0).max_value(100));
         let v = tc.draw(generators::integers::<Value>());
         self.subject.put(k, v);
         self.model.insert(k, v);
@@ -210,22 +214,14 @@ impl ShardTest {
     // Read a key and assert agreement with the model.
     #[rule]
     fn get(&mut self, tc: TestCase) {
-        let k = tc.draw(
-            generators::integers::<Key>()
-                .min_value(0)
-                .max_value(100),
-        );
+        let k = tc.draw(generators::integers::<Key>().min_value(0).max_value(100));
         assert_eq!(self.subject.get(k), self.model.get(&k).copied());
     }
 
     // Remove and assert the returned prior value matches.
     #[rule]
     fn remove(&mut self, tc: TestCase) {
-        let k = tc.draw(
-            generators::integers::<Key>()
-                .min_value(0)
-                .max_value(100),
-        );
+        let k = tc.draw(generators::integers::<Key>().min_value(0).max_value(100));
         let sub = self.subject.remove(k);
         let mdl = self.model.remove(&k);
         assert_eq!(sub, mdl);
@@ -250,12 +246,7 @@ impl ShardTest {
             self.model.len()
         );
         for (&k, &v) in &self.model.clone() {
-            assert_eq!(
-                self.subject.get(k),
-                Some(v),
-                "key {} value mismatch",
-                k
-            );
+            assert_eq!(self.subject.get(k), Some(v), "key {} value mismatch", k);
         }
         // Keys in subject must all be in model.
         let subject_keys: HashSet<Key> = self.subject.all_keys().into_iter().collect();

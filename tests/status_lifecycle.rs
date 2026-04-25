@@ -5,8 +5,8 @@
 //! QuorumVerifying → {Success | Failure}`, no skips, no backward edges,
 //! no egress from terminals.
 
-use cosaci::status::{is_allowed, is_terminal, Status, StatusMachine, TransitionError};
-use hegel::{generators, TestCase};
+use cosaci::status::{Status, StatusMachine, TransitionError, is_allowed, is_terminal};
+use hegel::{TestCase, generators};
 
 const STATES: [Status; 5] = [
     Status::Pending,

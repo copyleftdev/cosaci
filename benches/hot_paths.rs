@@ -12,14 +12,14 @@ use std::collections::HashMap;
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
-use cosaci::attestation::{canonicalize, hash as att_hash, Attestation, AttestationResult};
-use cosaci::gossip::{merge, NodeState};
-use cosaci::quorum::{aggregate, RunnerId, StakeMap, Vote, VoteResult, Weight};
-use cosaci::signing::{verify as ed_verify, Keypair};
-use cosaci::verifier::{compute_root, inclusion_proof, verify_inclusion, LeafHash};
-use cosaci::vrf::{verify as vrf_verify, VrfKeypair};
+use cosaci::attestation::{Attestation, AttestationResult, canonicalize, hash as att_hash};
+use cosaci::gossip::{NodeState, merge};
+use cosaci::quorum::{RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
+use cosaci::signing::{Keypair, verify as ed_verify};
+use cosaci::verifier::{LeafHash, compute_root, inclusion_proof, verify_inclusion};
+use cosaci::vrf::{VrfKeypair, verify as vrf_verify};
 
 fn bench_quorum_aggregate(c: &mut Criterion) {
     // Five-runner stake-weighted quorum — the workhorse shape.
@@ -62,9 +62,7 @@ fn bench_attestation_canonicalize(c: &mut Criterion) {
     c.bench_function("attestation/canonicalize", |b| {
         b.iter(|| canonicalize(black_box(&a)))
     });
-    c.bench_function("attestation/hash", |b| {
-        b.iter(|| att_hash(black_box(&a)))
-    });
+    c.bench_function("attestation/hash", |b| b.iter(|| att_hash(black_box(&a))));
 }
 
 fn bench_ed25519(c: &mut Criterion) {

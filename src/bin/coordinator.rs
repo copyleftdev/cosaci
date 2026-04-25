@@ -19,8 +19,8 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use cosaci::attestation::AttestationResult;
 use cosaci::merkle_log::MerkleLog;
-use cosaci::proto::{read_envelope, write_envelope, Envelope};
-use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
+use cosaci::proto::{Envelope, read_envelope, write_envelope};
+use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci::signing::VerifyingKey;
 use cosaci::tls::{install_crypto_provider, server_config_from_paths};
 
@@ -183,7 +183,7 @@ fn main() -> std::io::Result<()> {
         .iter()
         .map(|id| stake_map.get(id).copied().unwrap_or(0))
         .sum();
-    let threshold = (committee_stake * 2 + 2) / 3;
+    let threshold = (committee_stake * 2).div_ceil(3);
     let outcome = aggregate(&votes, threshold, &stake_map);
     let consensus_artifact = artifact_counts
         .iter()
@@ -221,10 +221,10 @@ fn main() -> std::io::Result<()> {
 // ────────────────────────────────────────────────────────────────────────
 
 fn arg_or(args: &[String], flag: &str, default: &str) -> String {
-    if let Some(pos) = args.iter().position(|a| a == flag) {
-        if let Some(v) = args.get(pos + 1) {
-            return v.clone();
-        }
+    if let Some(pos) = args.iter().position(|a| a == flag)
+        && let Some(v) = args.get(pos + 1)
+    {
+        return v.clone();
     }
     default.to_string()
 }
@@ -253,7 +253,7 @@ fn select_committee_by_pubkey_hash(
         .iter()
         .map(|a| {
             let mut h = Sha256::new();
-            h.update(&a.vrf_pk);
+            h.update(a.vrf_pk);
             h.update(seed);
             let digest: [u8; 32] = h.finalize().into();
             (a.runner_id, digest)

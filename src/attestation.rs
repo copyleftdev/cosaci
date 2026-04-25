@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use sha2::{Digest, Sha256};
 
-use crate::signing::{verify as sig_verify, Keypair, Signature, VerifyingKey};
+use crate::signing::{Keypair, Signature, VerifyingKey, verify as sig_verify};
 
 /// Result of a job as attested by a runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +60,8 @@ impl Attestation {
 #[must_use]
 pub fn canonicalize(a: &Attestation) -> Vec<u8> {
     let mut bytes = Vec::new();
-    ciborium::into_writer(a, &mut bytes).expect("ciborium serialization of Attestation is infallible");
+    ciborium::into_writer(a, &mut bytes)
+        .expect("ciborium serialization of Attestation is infallible");
     bytes
 }
 

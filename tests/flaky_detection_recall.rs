@@ -71,18 +71,10 @@ fn simulate_detection(
 #[hegel::test(test_cases = 15)]
 fn recall_meets_bar_under_injected_flakiness(tc: hegel::TestCase) {
     // Flakiness rate ∈ [0.10, 0.50] — non-trivial injection.
-    let p_hundredths = tc.draw(
-        generators::integers::<u32>()
-            .min_value(10)
-            .max_value(50),
-    );
+    let p_hundredths = tc.draw(generators::integers::<u32>().min_value(10).max_value(50));
     let p = f64::from(p_hundredths) / 100.0;
 
-    let n_tests = tc.draw(
-        generators::integers::<usize>()
-            .min_value(50)
-            .max_value(200),
-    );
+    let n_tests = tc.draw(generators::integers::<usize>().min_value(50).max_value(200));
 
     // K ∈ {3, 5, 7, 10}. Discrete choice from a small set.
     let k_idx = tc.draw(generators::integers::<usize>().min_value(0).max_value(3));
@@ -107,6 +99,11 @@ fn recall_meets_bar_under_injected_flakiness(tc: hegel::TestCase) {
     assert!(
         mean >= RECALL_BAR,
         "mean recall {} below bar {} (p={}, T={}, K={}, seed={})",
-        mean, RECALL_BAR, p, n_tests, runs_per_test, seed
+        mean,
+        RECALL_BAR,
+        p,
+        n_tests,
+        runs_per_test,
+        seed
     );
 }

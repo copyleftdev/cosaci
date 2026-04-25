@@ -91,11 +91,7 @@ impl<C: Clock> LeaseManager<C> {
     ///
     /// Returns `LeaseError::AlreadyLeased` if the pair currently holds
     /// an active lease.
-    pub fn acquire(
-        &mut self,
-        job_id: JobId,
-        runner_id: RunnerId,
-    ) -> Result<LeaseId, LeaseError> {
+    pub fn acquire(&mut self, job_id: JobId, runner_id: RunnerId) -> Result<LeaseId, LeaseError> {
         self.tick();
         let key = (job_id, runner_id);
         if self.active_by_pair.contains_key(&key) {
@@ -121,11 +117,11 @@ impl<C: Clock> LeaseManager<C> {
     /// (no late revival).
     pub fn complete(&mut self, lease_id: LeaseId) {
         self.tick();
-        if let Some(lease) = self.leases.get_mut(&lease_id) {
-            if matches!(lease.state, LeaseState::Active) {
-                lease.state = LeaseState::Completed;
-                self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
-            }
+        if let Some(lease) = self.leases.get_mut(&lease_id)
+            && matches!(lease.state, LeaseState::Active)
+        {
+            lease.state = LeaseState::Completed;
+            self.active_by_pair.remove(&(lease.job_id, lease.runner_id));
         }
     }
 

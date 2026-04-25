@@ -30,8 +30,8 @@ fn simulate_push_gossip(n: usize, fanout: usize, rng: &mut ChaCha8Rng) -> usize 
     let max_rounds = n * 4;
     while !infected.iter().all(|&b| b) && rounds < max_rounds {
         let mut new_this_round = vec![false; n];
-        for i in 0..n {
-            if !infected[i] {
+        for (i, &is_infected) in infected.iter().enumerate() {
+            if !is_infected {
                 continue;
             }
             for _ in 0..fanout {
@@ -53,16 +53,8 @@ fn simulate_push_gossip(n: usize, fanout: usize, rng: &mut ChaCha8Rng) -> usize 
 
 #[hegel::test(test_cases = 15)]
 fn gossip_propagates_within_log_bound(tc: hegel::TestCase) {
-    let n = tc.draw(
-        generators::integers::<usize>()
-            .min_value(4)
-            .max_value(100),
-    );
-    let fanout = tc.draw(
-        generators::integers::<usize>()
-            .min_value(2)
-            .max_value(8),
-    );
+    let n = tc.draw(generators::integers::<usize>().min_value(4).max_value(100));
+    let fanout = tc.draw(generators::integers::<usize>().min_value(2).max_value(8));
     let seed = tc.draw(generators::integers::<u64>());
 
     let mut rounds_list = Vec::with_capacity(N_INNER);
@@ -71,8 +63,7 @@ fn gossip_propagates_within_log_bound(tc: hegel::TestCase) {
         rounds_list.push(simulate_push_gossip(n, fanout, &mut rng));
     }
 
-    let mean_rounds: f64 =
-        rounds_list.iter().sum::<usize>() as f64 / N_INNER as f64;
+    let mean_rounds: f64 = rounds_list.iter().sum::<usize>() as f64 / N_INNER as f64;
 
     let log_f_n = (n as f64).ln() / (fanout as f64).ln();
     let bar = C * log_f_n.max(1.0);
@@ -80,6 +71,11 @@ fn gossip_propagates_within_log_bound(tc: hegel::TestCase) {
     assert!(
         mean_rounds <= bar,
         "mean propagation rounds {} exceeds bar {} (n={}, fanout={}, C={}, log_f_n={})",
-        mean_rounds, bar, n, fanout, C, log_f_n
+        mean_rounds,
+        bar,
+        n,
+        fanout,
+        C,
+        log_f_n
     );
 }

@@ -10,7 +10,7 @@
 //! append-only.md` (Tier 1) will use its own primitive (MMR) — the two
 //! serve different workloads and can diverge.
 
-use rs_merkle::{algorithms::Sha256, Hasher, MerkleProof, MerkleTree};
+use rs_merkle::{Hasher, MerkleProof, MerkleTree, algorithms::Sha256};
 
 /// A 32-byte SHA-256 leaf hash. Opaque from the verifier's perspective —
 /// callers decide what content to feed in (env hash, cmd hash, artifact

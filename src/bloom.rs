@@ -46,7 +46,7 @@ impl BloomFilter {
         for i in 0..self.k {
             let mut h = Sha256::new();
             h.update(item);
-            h.update(&(i as u32).to_le_bytes());
+            h.update((i as u32).to_le_bytes());
             let digest: [u8; 32] = h.finalize().into();
             let mut eight = [0_u8; 8];
             eight.copy_from_slice(&digest[..8]);

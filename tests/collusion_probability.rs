@@ -30,15 +30,13 @@ const TOLERANCE: f64 = 0.015;
 fn score(seed: &[u8; 32], runner: usize) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(seed);
-    h.update(&(runner as u64).to_le_bytes());
+    h.update((runner as u64).to_le_bytes());
     h.finalize().into()
 }
 
 /// Top-k committee under pick-smallest-hash rule.
 fn pick_top_k(seed: &[u8; 32], n_runners: usize, k: usize) -> HashSet<usize> {
-    let mut scored: Vec<([u8; 32], usize)> = (0..n_runners)
-        .map(|i| (score(seed, i), i))
-        .collect();
+    let mut scored: Vec<([u8; 32], usize)> = (0..n_runners).map(|i| (score(seed, i), i)).collect();
     scored.sort_by(|a, b| a.0.cmp(&b.0));
     scored.into_iter().take(k).map(|(_, i)| i).collect()
 }
@@ -53,12 +51,7 @@ fn theoretical_prob(n: usize, k: usize) -> f64 {
     p
 }
 
-fn simulate_empirical_rate(
-    n_runners: usize,
-    k: usize,
-    n_jobs: usize,
-    rng: &mut ChaCha8Rng,
-) -> f64 {
+fn simulate_empirical_rate(n_runners: usize, k: usize, n_jobs: usize, rng: &mut ChaCha8Rng) -> f64 {
     // Fix colluders to the first k runner indices.
     let colluders: HashSet<usize> = (0..k).collect();
     let mut hits = 0_usize;
@@ -76,11 +69,7 @@ fn simulate_empirical_rate(
 fn empirical_collusion_rate_within_bound(tc: hegel::TestCase) {
     // k ∈ [2, 5]. Small k keeps C(N, k) sizable for interesting
     // theoretical bounds without dominating the test.
-    let k = tc.draw(
-        generators::integers::<usize>()
-            .min_value(2)
-            .max_value(5),
-    );
+    let k = tc.draw(generators::integers::<usize>().min_value(2).max_value(5));
     // N ∈ [k+1, 30]. Avoid N == k (trivially 100% collusion probability).
     let n = tc.draw(
         generators::integers::<usize>()

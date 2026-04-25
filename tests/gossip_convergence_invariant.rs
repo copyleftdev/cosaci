@@ -7,8 +7,8 @@
 //! Propagation *time* (vs merely convergence) is the B-stat
 //! `gossip-propagation-time` card in Tier 2; we don't touch it here.
 
-use cosaci::gossip::{merge, Key, NodeState, Timestamp, Value};
-use hegel::{generators, TestCase};
+use cosaci::gossip::{Key, NodeState, Timestamp, Value, merge};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
@@ -18,11 +18,7 @@ fn draw_state(tc: &TestCase) -> NodeState {
     let n = tc.draw(generators::integers::<usize>().min_value(0).max_value(8));
     let mut s = NodeState::new();
     for _ in 0..n {
-        let k = tc.draw(
-            generators::integers::<Key>()
-                .min_value(0)
-                .max_value(10),
-        );
+        let k = tc.draw(generators::integers::<Key>().min_value(0).max_value(10));
         let v = tc.draw(generators::integers::<Value>().max_value(1_000));
         let t = tc.draw(generators::integers::<Timestamp>().max_value(1_000));
         s.write(k, v, t);
@@ -70,6 +66,7 @@ fn merge_is_associative(tc: hegel::TestCase) {
 // state into itself) drives the cluster to a fixpoint.
 // ----------------------------------------------------------------------------
 #[hegel::test]
+#[allow(clippy::needless_range_loop)]
 fn full_sync_converges_in_one_round(tc: hegel::TestCase) {
     let n = tc.draw(generators::integers::<usize>().min_value(1).max_value(6));
     let mut nodes: Vec<NodeState> = (0..n).map(|_| draw_state(&tc)).collect();
@@ -97,6 +94,7 @@ fn full_sync_converges_in_one_round(tc: hegel::TestCase) {
 // regardless of interleaving of writes and pairwise merges.
 // ----------------------------------------------------------------------------
 #[hegel::test]
+#[allow(clippy::needless_range_loop)]
 fn interleaved_writes_and_gossip_converge(tc: hegel::TestCase) {
     let n = tc.draw(generators::integers::<usize>().min_value(2).max_value(5));
     let mut nodes: Vec<NodeState> = (0..n).map(|_| NodeState::new()).collect();

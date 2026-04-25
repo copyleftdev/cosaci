@@ -39,12 +39,9 @@ impl TokenBucket {
     fn refill(&mut self, now_ns: u64) {
         let elapsed_ns = now_ns.saturating_sub(self.last_refill_ns);
         // u128 intermediate to avoid overflow on large elapsed * rate.
-        let new_tokens = (u128::from(elapsed_ns) * u128::from(self.refill_per_sec)
-            / 1_000_000_000_u128) as u64;
-        self.tokens = self
-            .tokens
-            .saturating_add(new_tokens)
-            .min(self.capacity);
+        let new_tokens =
+            (u128::from(elapsed_ns) * u128::from(self.refill_per_sec) / 1_000_000_000_u128) as u64;
+        self.tokens = self.tokens.saturating_add(new_tokens).min(self.capacity);
         self.last_refill_ns = now_ns;
     }
 

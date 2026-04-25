@@ -32,8 +32,7 @@ pub fn execute_add(a: i32, b: i32) -> Result<i32, String> {
     let engine = Engine::default();
     let module = Module::new(&engine, CANNED_WAT).map_err(|e| format!("module: {e}"))?;
     let mut store: Store<()> = Store::new(&engine, ());
-    let instance =
-        Instance::new(&mut store, &module, &[]).map_err(|e| format!("instance: {e}"))?;
+    let instance = Instance::new(&mut store, &module, &[]).map_err(|e| format!("instance: {e}"))?;
     let add = instance
         .get_typed_func::<(i32, i32), i32>(&mut store, "add")
         .map_err(|e| format!("get_typed_func: {e}"))?;
@@ -47,6 +46,6 @@ pub fn execute_add(a: i32, b: i32) -> Result<i32, String> {
 #[must_use]
 pub fn output_hash(result: i32) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(&result.to_le_bytes());
+    hasher.update(result.to_le_bytes());
     hasher.finalize().into()
 }

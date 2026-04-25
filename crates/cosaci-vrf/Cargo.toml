@@ -1,0 +1,9 @@
+[package]
+name        = "cosaci-vrf"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI: VRF subsystem (stub — module arrives in #3)"
+publish     = false

@@ -78,10 +78,7 @@ fn simulate_quorum_episode(
         .enumerate()
         .map(|(i, &a)| (i, f64::from(a) / n_rounds as f64))
         .collect();
-    indexed.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let top = &indexed[..n_honest];
     let honest_in_top = top.iter().filter(|(i, _)| !is_adversary[*i]).count();
@@ -101,23 +98,11 @@ const HONEST_FRACTION_BAR: f64 = 0.95;
 #[hegel::test(test_cases = 15)]
 fn reputation_ranks_adversaries_below_honest(tc: hegel::TestCase) {
     // Distribution parameters drawn by Hegel.
-    let p_hundredths = tc.draw(
-        generators::integers::<u32>()
-            .min_value(0)
-            .max_value(33),
-    );
+    let p_hundredths = tc.draw(generators::integers::<u32>().min_value(0).max_value(33));
     let p = f64::from(p_hundredths) / 100.0;
 
-    let n_runners = tc.draw(
-        generators::integers::<usize>()
-            .min_value(20)
-            .max_value(60),
-    );
-    let n_rounds = tc.draw(
-        generators::integers::<usize>()
-            .min_value(30)
-            .max_value(80),
-    );
+    let n_runners = tc.draw(generators::integers::<usize>().min_value(20).max_value(60));
+    let n_rounds = tc.draw(generators::integers::<usize>().min_value(30).max_value(80));
     let seed = tc.draw(generators::integers::<u64>());
 
     // Inner loop: simulate N_INNER episodes with different RNG seeds,

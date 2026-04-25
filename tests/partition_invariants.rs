@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use cosaci::lease::LeaseId;
 use cosaci::partition::{Cluster, ClusterError, Side};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 mod common;
 use common::TestClock;
@@ -198,7 +198,8 @@ impl PartitionTest {
                 self.subject.active_lease_for(job, runner),
                 Some(expected_lease),
                 "active lease diverged for ({}, {})",
-                job, runner
+                job,
+                runner
             );
         }
     }

@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use cosaci::merkle_log::{verify_inclusion, Hash, InclusionProof, MerkleLog};
-use hegel::{generators, TestCase};
+use cosaci::merkle_log::{Hash, InclusionProof, MerkleLog, verify_inclusion};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
@@ -39,7 +39,11 @@ impl LogTest {
     fn append(&mut self, tc: TestCase) {
         let entry = draw_hash(&tc);
         let pos = self.subject.append(entry);
-        assert_eq!(pos, self.model.len() as u64, "position returned by append diverged");
+        assert_eq!(
+            pos,
+            self.model.len() as u64,
+            "position returned by append diverged"
+        );
         self.model.push(entry);
         assert_eq!(self.subject.len(), self.model.len() as u64);
     }
@@ -102,9 +106,10 @@ impl LogTest {
     #[invariant]
     fn frozen_proofs_still_verify(&mut self, _: TestCase) {
         for proof in &self.frozen_proofs.clone() {
-            let root = self.subject.root_at(proof.length_at_proof).expect(
-                "root_at must exist for a length that already had a proof issued",
-            );
+            let root = self
+                .subject
+                .root_at(proof.length_at_proof)
+                .expect("root_at must exist for a length that already had a proof issued");
             assert!(
                 verify_inclusion(proof, root),
                 "frozen proof at position {} length {} no longer verifies",

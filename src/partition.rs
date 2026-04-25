@@ -75,7 +75,9 @@ impl<C: Clock> Cluster<C> {
         runner: RunnerId,
     ) -> Result<LeaseId, ClusterError> {
         self.authorize(side)?;
-        self.manager.acquire(job, runner).map_err(ClusterError::from)
+        self.manager
+            .acquire(job, runner)
+            .map_err(ClusterError::from)
     }
 
     /// Complete a lease. Rejected with `NotAuthoritative` if `side` is not
@@ -121,11 +123,7 @@ impl<C: Clock> Cluster<C> {
     }
 
     /// Active lease for the `(job, runner)` pair (passed through).
-    pub fn active_lease_for(
-        &mut self,
-        job: JobId,
-        runner: RunnerId,
-    ) -> Option<LeaseId> {
+    pub fn active_lease_for(&mut self, job: JobId, runner: RunnerId) -> Option<LeaseId> {
         self.manager.active_lease_for(job, runner)
     }
 

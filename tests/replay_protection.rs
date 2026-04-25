@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cosaci::replay::{AcceptError, ReplayGuard};
-use hegel::{generators, TestCase};
+use hegel::{TestCase, generators};
 
 mod common;
 use common::TestClock;
@@ -76,13 +76,21 @@ impl ReplayTest {
 
         match self.guard.accept(nonce, timestamp) {
             Ok(()) => {
-                assert!(!stale, "accept succeeded on stale timestamp (age={}, ttl={})", age, TTL_NS);
+                assert!(
+                    !stale,
+                    "accept succeeded on stale timestamp (age={}, ttl={})",
+                    age, TTL_NS
+                );
                 assert!(!replay, "accept succeeded on replayed nonce {}", nonce);
                 self.accepted.insert(nonce, now);
                 self.ever_seen.insert(nonce);
             }
             Err(AcceptError::StaleTimestamp) => {
-                assert!(stale, "rejected fresh timestamp as stale: age={} ttl={}", age, TTL_NS);
+                assert!(
+                    stale,
+                    "rejected fresh timestamp as stale: age={} ttl={}",
+                    age, TTL_NS
+                );
             }
             Err(AcceptError::Replay) => {
                 assert!(
@@ -90,10 +98,7 @@ impl ReplayTest {
                     "rejected unique nonce as replay: nonce={}, accepted={:?}",
                     nonce, self.accepted
                 );
-                assert!(
-                    !stale,
-                    "should not reach replay check with stale timestamp"
-                );
+                assert!(!stale, "should not reach replay check with stale timestamp");
             }
         }
     }

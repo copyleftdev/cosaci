@@ -7,7 +7,7 @@
 //! that peak's hash is a pure function of `leaves[start..start+2^h]`
 //! and never changes as more leaves are appended.
 
-use cosaci::merkle_log::{peak_heights, Hash, MerkleLog};
+use cosaci::merkle_log::{Hash, MerkleLog, peak_heights};
 use hegel::generators;
 
 fn draw_hash(tc: &hegel::TestCase) -> Hash {
@@ -31,12 +31,18 @@ fn peak_heights_are_bit_positions(tc: hegel::TestCase) {
         heights.len() as u32,
         popcount,
         "peak count mismatch for n={}: got {} peaks, expected {}",
-        n, heights.len(), popcount
+        n,
+        heights.len(),
+        popcount
     );
 
     // Descending order (MSB first).
     for pair in heights.windows(2) {
-        assert!(pair[0] > pair[1], "peak heights not strictly descending: {:?}", heights);
+        assert!(
+            pair[0] > pair[1],
+            "peak heights not strictly descending: {:?}",
+            heights
+        );
     }
 
     // Each listed height corresponds to a 1-bit in n.
@@ -44,13 +50,18 @@ fn peak_heights_are_bit_positions(tc: hegel::TestCase) {
         assert!(
             (n >> h) & 1 == 1,
             "height {} listed but bit not set in n={}",
-            h, n
+            h,
+            n
         );
     }
 
     // Sum of 2^h over peak heights equals n (peaks cover exactly the leaves).
     let covered: u64 = heights.iter().map(|&h| 1_u64 << h).sum();
-    assert_eq!(covered, n, "peaks don't cover n: covered={}, n={}", covered, n);
+    assert_eq!(
+        covered, n,
+        "peaks don't cover n: covered={}, n={}",
+        covered, n
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -123,8 +134,7 @@ fn first_peak_is_stable_across_extensions(tc: hegel::TestCase) {
     // Peak hashes at total length: multiple peaks. First one must match.
     let peaks_at_total = log.peak_hashes(total);
     assert_eq!(
-        peaks_at_total[0],
-        peaks_at_power[0],
+        peaks_at_total[0], peaks_at_power[0],
         "first peak shifted when log extended from {} to {}",
         first_peak_size, total
     );
@@ -162,5 +172,9 @@ fn power_of_two_has_single_peak_equal_to_root(tc: hegel::TestCase) {
     let peaks = log.peak_hashes(n);
     assert_eq!(peaks.len(), 1);
     let root = log.root_at(n).expect("nonempty root");
-    assert_eq!(peaks[0], root, "single peak != root at power-of-2 length {}", n);
+    assert_eq!(
+        peaks[0], root,
+        "single peak != root at power-of-2 length {}",
+        n
+    );
 }

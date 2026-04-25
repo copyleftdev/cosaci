@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cosaci::quorum::{aggregate, Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight};
+use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use hegel::generators;
 
 // ----------------------------------------------------------------------------
@@ -16,11 +16,7 @@ fn draw_fleet(tc: &hegel::TestCase, n_runners: usize) -> (Vec<RunnerId>, StakeMa
     let ids: Vec<RunnerId> = (0..n_runners as RunnerId).collect();
     let mut stake: StakeMap = HashMap::with_capacity(n_runners);
     for &id in &ids {
-        let w = tc.draw(
-            generators::integers::<Weight>()
-                .min_value(1)
-                .max_value(100),
-        );
+        let w = tc.draw(generators::integers::<Weight>().min_value(1).max_value(100));
         stake.insert(id, w);
     }
     (ids, stake)
@@ -67,11 +63,7 @@ fn draw_unique_votes(tc: &hegel::TestCase, ids: &[RunnerId]) -> Vec<Vote> {
 
 /// Draw arbitrary votes (duplicates allowed) over `ids`.
 fn draw_any_votes(tc: &hegel::TestCase, ids: &[RunnerId]) -> Vec<Vote> {
-    let k = tc.draw(
-        generators::integers::<usize>()
-            .min_value(0)
-            .max_value(50),
-    );
+    let k = tc.draw(generators::integers::<usize>().min_value(0).max_value(50));
     if ids.is_empty() || k == 0 {
         return Vec::new();
     }

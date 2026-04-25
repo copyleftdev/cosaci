@@ -6,8 +6,8 @@
 //! semantic security against an equipped attacker is a property of
 //! ChaCha20-Poly1305 itself (tested upstream by the `chacha20poly1305` crate).
 
-use cosaci::confidentiality::{decrypt, encrypt, unwrap_dek, wrap_dek, AeadError, Nonce, SymKey};
-use hegel::{generators, TestCase};
+use cosaci::confidentiality::{AeadError, Nonce, SymKey, decrypt, encrypt, unwrap_dek, wrap_dek};
+use hegel::{TestCase, generators};
 
 // ----------------------------------------------------------------------------
 // Draw helpers
