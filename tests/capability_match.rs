@@ -3,7 +3,7 @@
 //! Encodes the falsifiable claims of `hypotheses/capability-match.md`
 //! (SPEC.md §5.2b, class A).
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use cosaci::capabilities::{Capabilities, JobRequirements, Platform, Runtime, matches};
 use hegel::{TestCase, generators};
@@ -31,8 +31,8 @@ fn draw_runtime(tc: &TestCase) -> Runtime {
     RUNTIMES[i]
 }
 
-fn draw_runtime_set(tc: &TestCase) -> HashSet<Runtime> {
-    let mut s = HashSet::new();
+fn draw_runtime_set(tc: &TestCase) -> BTreeSet<Runtime> {
+    let mut s = BTreeSet::new();
     for r in RUNTIMES {
         if tc.draw(generators::booleans()) {
             s.insert(r);
