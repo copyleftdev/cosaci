@@ -395,6 +395,7 @@ dependencies = [
  "cosaci-state",
  "cosaci-vrf",
  "cosaci-wasm",
+ "rustls",
 ]
 
 [[package]]

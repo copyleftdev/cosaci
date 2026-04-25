@@ -21,6 +21,7 @@ use cosaci_protocol::tls::{SUBJECT_SERVER, TestCa, install_crypto_provider};
 
 const ADDR_BOUNDED: &str = "127.0.0.1:7879";
 const ADDR_SIGTERM: &str = "127.0.0.1:7880";
+const READ_ADDR_BOUNDED: &str = "127.0.0.1:7881";
 const FLEET: u64 = 5;
 const COMMITTEE: usize = 3;
 const MAX_JOBS_BOUNDED: u64 = 3;
@@ -67,7 +68,9 @@ fn main() {
         &agent_bin,
         &certs,
         ADDR_BOUNDED,
-        RoundKind::Bounded,
+        RoundKind::Bounded {
+            read_addr: Some(READ_ADDR_BOUNDED),
+        },
     );
     println!("\n[launcher] pass 1 coord exit: {exit1:?}");
     assert_eq!(exit1, Some(0), "bounded coord should exit 0");
@@ -93,7 +96,12 @@ fn main() {
 
 #[derive(Clone, Copy)]
 enum RoundKind {
-    Bounded,
+    /// Bounded run; if `Some(read_addr)`, also spawns a `verify`
+    /// subprocess against the coord's read API and asserts the
+    /// retrieved bundle verifies.
+    Bounded {
+        read_addr: Option<&'static str>,
+    },
     Sigterm,
 }
 
@@ -118,9 +126,13 @@ fn run_round(
         "--committee".into(),
         COMMITTEE.to_string(),
     ];
-    if matches!(kind, RoundKind::Bounded) {
+    if let RoundKind::Bounded { read_addr } = kind {
         coord_args.push("--max-jobs".into());
         coord_args.push(MAX_JOBS_BOUNDED.to_string());
+        if let Some(read_addr) = read_addr {
+            coord_args.push("--read-addr".into());
+            coord_args.push(read_addr.to_string());
+        }
     }
 
     let mut coord = Command::new(coord_bin)
@@ -170,6 +182,55 @@ fn run_round(
         agents.push(child);
     }
 
+    // ── Verifier: run alongside the bounded round ─────────────────────────
+    // Once the agent fleet is up and the coord starts processing jobs,
+    // the verifier polls the read API for job_id 1, fetches the bundle,
+    // and runs `verify_inclusion` against the simultaneously-retrieved
+    // log root. This is the end-to-end round-trip for issue #44.
+    let verify_handle: Option<thread::JoinHandle<Option<i32>>> = if let RoundKind::Bounded {
+        read_addr: Some(read_addr),
+    } = kind
+    {
+        let bin_dir = coord_bin.parent().expect("bin dir").to_path_buf();
+        let verify_bin = bin_dir.join("verify");
+        let ca = certs.ca.clone();
+        // Reuse agent-0's cert as the auditor identity. The CA
+        // trusts it; the read API doesn't differentiate.
+        let (cert, key) = certs.agents[0].clone();
+        let read_addr = read_addr.to_string();
+        Some(thread::spawn(move || -> Option<i32> {
+            let mut child = Command::new(&verify_bin)
+                .args([
+                    "--addr",
+                    &read_addr,
+                    "--ca",
+                    &ca.to_string_lossy(),
+                    "--cert",
+                    &cert.to_string_lossy(),
+                    "--key",
+                    &key.to_string_lossy(),
+                    "--server-name",
+                    SUBJECT_SERVER,
+                    "--job-id",
+                    "1",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn verify");
+            let out = child.stdout.take().expect("stdout");
+            let err = child.stderr.take().expect("stderr");
+            let t_o = thread::spawn(move || forward(out, "verify"));
+            let t_e = thread::spawn(move || forward(err, "verify!"));
+            let status = child.wait().expect("verify wait");
+            let _ = t_o.join();
+            let _ = t_e.join();
+            status.code()
+        }))
+    } else {
+        None
+    };
+
     if matches!(kind, RoundKind::Sigterm) {
         // Schedule a SIGTERM to coord while jobs are running.
         thread::spawn(move || {
@@ -191,6 +252,11 @@ fn run_round(
     }
     for t in agent_threads {
         let _ = t.join();
+    }
+    if let Some(h) = verify_handle {
+        let v = h.join().expect("verify thread");
+        eprintln!("[launcher] verify exit: {v:?}");
+        assert_eq!(v, Some(0), "verify should exit 0 on a verifying bundle");
     }
     coord_status.code()
 }

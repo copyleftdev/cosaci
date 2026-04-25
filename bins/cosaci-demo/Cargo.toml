@@ -17,6 +17,7 @@ cosaci-state    = { path = "../../crates/cosaci-state" }
 cosaci-protocol = { path = "../../crates/cosaci-protocol" }
 cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
 cosaci-wasm     = { path = "../../crates/cosaci-wasm" }
+rustls          = { workspace = true }
 
 [lints]
 workspace = true

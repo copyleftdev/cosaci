@@ -12,6 +12,35 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — read API for attestations + Merkle proofs (#44)
+
+- `cosaci-core::retrieval` (new): pure `JobRecord`, `JobBundle`, and
+  `build_bundle(&records, &log, job_id) -> Option<JobBundle>`. The
+  bundle is wire-shippable (CBOR) and freezes the
+  `(log_position, log_length_at_anchor)` pair so retrievals are
+  deterministic across concurrent appends.
+- `cosaci-core::merkle_log::InclusionProof` is now `Serialize +
+  Deserialize` — the wire-shippable form for external auditors.
+- New protocol envelope variants in `cosaci-protocol::proto`:
+  `GetJob { job_id }` / `JobBundleResponse(JobBundle)` /
+  `JobNotFound { job_id }` / `GetLogRoot` /
+  `LogRoot { root, length }`.
+- Coordinator `--read-addr <addr>` flag binds a second mTLS listener
+  that serves the read API on a daemon thread. Each accepted
+  connection handles one request envelope, then closes. The job
+  loop's `(records, log)` state is shared via `Arc<Mutex<…>>`.
+- New `bins/cosaci-demo/src/bin/verify.rs` binary speaks the read
+  protocol: connect, `GetJob`, retry with backoff until anchored,
+  cross-check `GetLogRoot`, run `verify_inclusion`. Exit 0 on a
+  verifying bundle, 1 on a tampered/missing one.
+- `demo_networked` runs `verify` alongside the bounded round and
+  asserts exit 0, so the smoke test now exercises the full
+  end-to-end retrieval round-trip.
+- New hypothesis card `hypotheses/retrieval-soundness.md` (class A,
+  Tier 0). Five Hegel properties: proof verifies for every recorded
+  job, tamper in entry rejected, tamper in root rejected, bundle is
+  byte-stable across calls, unknown job returns None.
+
 ### Added — resource-limit enforcement on WASM steps (#43)
 
 - New `cosaci-wasm::execute_with_limits(wasm, args, ExecLimits)` —

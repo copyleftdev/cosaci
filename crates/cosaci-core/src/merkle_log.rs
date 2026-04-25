@@ -37,6 +37,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use rs_merkle::{Hasher, MerkleProof, MerkleTree, algorithms::Sha256};
+use serde::{Deserialize, Serialize};
 
 /// Leaf / entry hash.
 pub type Hash = [u8; 32];
@@ -47,8 +48,9 @@ pub fn hash_bytes(data: &[u8]) -> Hash {
     Sha256::hash(data)
 }
 
-/// Inclusion proof bundle.
-#[derive(Clone, Debug)]
+/// Inclusion proof bundle. Wire-shippable so the read API (issue #44)
+/// can hand it to external auditors.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InclusionProof {
     /// 0-indexed position of the entry in the log.
     pub position: u64,
