@@ -12,6 +12,26 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — persistent attestation log on disk (#33)
+
+- `cosaci-core::merkle_log` gains a `Store` trait + two impls:
+  - `MemStore` (default) — `Vec<Hash>` in RAM. Identical v0.2 behavior.
+  - `FileStore` — append-only file, one fixed 32-byte record per entry,
+    `sync_data` after every append. Reopening from the same path
+    recovers byte-identical state.
+- `MerkleLog<S = MemStore>` is generic; the v0.2 `MerkleLog::new()`
+  surface is unchanged (returns `MerkleLog<MemStore>` with infallible
+  `append`). The new file-backed surface is
+  `MerkleLog::<FileStore>::open(path)?` with `append(...) -> Result`.
+- Coordinator `--log <path>` flag selects the file-backed log; default
+  empty = in-memory (current demo behavior).
+- New hypothesis card `hypotheses/merkle-log-persistence.md` (class A,
+  Tier 1). Four Hegel properties: append-drop-reopen preserves entries
+  + root + length; mid-stream reopen matches uninterrupted-append
+  sequence; empty-log persistence; corrupt-file detection rejects
+  non-multiple-of-32 file sizes.
+- Adds `tempfile` as a dev-dep for filesystem-aware property tests.
+
 ### Added — capability-aware committee selection (#34)
 
 - `cosaci-core::capabilities` gains a wire-stable representation:

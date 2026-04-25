@@ -39,6 +39,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `coordinator-shard-algebra` | §4.1.1 | A | **passing** | `tests/coordinator_shard_algebra.rs` + `tests/shard_incremental_handoff.rs` | hand-rolled + handoff + replicas |
 | `vrf-assignment-uniformity` | §7.1 | A | **passing** | `tests/vrf_assignment_uniformity.rs` | schnorrkel 0.11 + merlin 3.0 |
 | `merkle-log-append-only` | §10.2 | A | **passing** | `tests/merkle_log_append_only.rs` + `tests/merkle_log_mmr_peaks.rs` | rs_merkle 1.5 + MMR peaks |
+| `merkle-log-persistence` | §10.5 | A | encoded | `tests/merkle_log_persistence.rs` | tempfile + FileStore (#33) |
 | `tenant-rate-limit` | §13 (new) | A | **passing** | `tests/tenant_rate_limit.rs` | hand-rolled token bucket |
 | `partition-invariants` | §12.3 | A | **passing** | `tests/partition_invariants.rs` + `tests/replicated_cluster_split_brain.rs` | Clock ✓ + gate + 2-replica model |
 | `confidentiality-algebra` | §9 (new) | A | **passing** | `tests/confidentiality_algebra.rs` | chacha20poly1305 0.10 |

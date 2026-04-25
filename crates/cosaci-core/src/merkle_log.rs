@@ -1,7 +1,8 @@
 //! Append-only Merkle log for attestation anchoring.
 //!
 //! Source: `SPEC.md` §10.2 / `hypotheses/merkle-log-append-only.md`
-//! (class A). The log is append-only; the Merkle root at any prefix
+//! (class A) + `hypotheses/merkle-log-persistence.md` (issue #33,
+//! class A). The log is append-only; the Merkle root at any prefix
 //! length is a pure function of that prefix; inclusion proofs against
 //! a frozen prefix-root remain valid regardless of later appends.
 //!
@@ -14,6 +15,26 @@
 //! peak's hash never changes** — this is the structural guarantee that
 //! a production MMR implementation would use to achieve O(log n) proof
 //! extraction via peak caching.
+//!
+//! # Persistence (issue #33)
+//!
+//! `MerkleLog` is generic over a [`Store`] backend. Two impls ship:
+//!
+//! - [`MemStore`] (default) — `Vec<Hash>` in RAM. Identical to the v0.2
+//!   behavior; `MerkleLog::new()` constructs this. Restart loses state.
+//! - [`FileStore`] — append-only file with one fixed-size 32-byte record
+//!   per entry. `sync_data` after every append; reopening from the same
+//!   path recovers byte-identical state. Construct via
+//!   `MerkleLog::<FileStore>::open(path)`.
+//!
+//! The in-memory `entries: Vec<Hash>` cache mirrors the store, so
+//! `root` / `inclusion_proof` / `peak_hashes` are O(n) on the cache —
+//! same performance as v0.2. The store is the durable mirror.
+
+use std::convert::Infallible;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use rs_merkle::{Hasher, MerkleProof, MerkleTree, algorithms::Sha256};
 
@@ -39,29 +60,212 @@ pub struct InclusionProof {
     pub length_at_proof: u64,
 }
 
-/// Append-only Merkle log. Only `append` mutates state; there is no
-/// deletion, overwrite, or reordering API. Past roots and past proofs
-/// are not cached — they are recomputed from the authoritative entry
-/// list on demand.
+// ────────────────────────────────────────────────────────────────────────
+// Store trait + impls (issue #33)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Pluggable durable backend for [`MerkleLog`]. Two impls ship:
+/// [`MemStore`] for tests + the in-process demo, [`FileStore`] for
+/// production.
+///
+/// Implementations of [`append`](Store::append) MUST be durable when
+/// they return `Ok` — the calling code treats a successful return as a
+/// commit. For [`FileStore`] this means `sync_data` before returning;
+/// for [`MemStore`] there's no disk to sync, but the API contract is
+/// the same.
+pub trait Store {
+    /// Error type — `Infallible` for in-memory backends,
+    /// `std::io::Error` for disk-backed ones.
+    type Error;
+
+    /// Append `entry` and return its 0-indexed position. Must be
+    /// durable on `Ok` (see trait docs).
+    ///
+    /// # Errors
+    ///
+    /// Implementation-defined.
+    fn append(&mut self, entry: Hash) -> Result<u64, Self::Error>;
+
+    /// Read every entry from the backing store, in append order.
+    /// Called once at log open to populate the in-memory mirror.
+    ///
+    /// # Errors
+    ///
+    /// Implementation-defined.
+    fn read_all(&self) -> Result<Vec<Hash>, Self::Error>;
+}
+
+/// In-memory store. The default backend; never fails.
 #[derive(Clone, Debug, Default)]
-pub struct MerkleLog {
+pub struct MemStore {
     entries: Vec<Hash>,
 }
 
-impl MerkleLog {
-    /// Construct an empty log.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+impl Store for MemStore {
+    type Error = Infallible;
+
+    fn append(&mut self, entry: Hash) -> Result<u64, Self::Error> {
+        let pos = self.entries.len() as u64;
+        self.entries.push(entry);
+        Ok(pos)
     }
 
-    /// Append an entry. Returns its position (0-indexed).
+    fn read_all(&self) -> Result<Vec<Hash>, Self::Error> {
+        Ok(self.entries.clone())
+    }
+}
+
+/// Append-only file-backed store. Each entry is a fixed 32-byte record;
+/// the file is a pure concatenation of `Hash` values, no header or
+/// checksum. `sync_data` is called after every append before returning,
+/// so a successful `Ok(_)` means the entry is on disk.
+///
+/// Reopening from the same path recovers the log byte-for-byte. The
+/// hypothesis card `merkle-log-persistence` encodes this as a Hegel
+/// property.
+pub struct FileStore {
+    path: PathBuf,
+    file: File,
+    len: u64,
+}
+
+impl FileStore {
+    /// Open (or create) a file-backed log at `path`. The file is
+    /// expected to be a multiple of 32 bytes; a non-multiple length
+    /// indicates corruption and returns `InvalidData`.
+    ///
+    /// # Errors
+    ///
+    /// I/O errors from opening the file, or `InvalidData` if the
+    /// existing file size isn't a multiple of 32.
+    pub fn open<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&path)?;
+        let bytes = file.metadata()?.len();
+        if bytes % 32 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "log file size {bytes} is not a multiple of 32 — file corrupt or truncated mid-append"
+                ),
+            ));
+        }
+        Ok(Self {
+            path,
+            file,
+            len: bytes / 32,
+        })
+    }
+}
+
+impl Store for FileStore {
+    type Error = std::io::Error;
+
+    fn append(&mut self, entry: Hash) -> std::io::Result<u64> {
+        self.file.write_all(&entry)?;
+        self.file.sync_data()?;
+        let pos = self.len;
+        self.len += 1;
+        Ok(pos)
+    }
+
+    fn read_all(&self) -> std::io::Result<Vec<Hash>> {
+        let mut f = OpenOptions::new().read(true).open(&self.path)?;
+        let mut buf = Vec::with_capacity((self.len * 32) as usize);
+        f.read_to_end(&mut buf)?;
+        if buf.len() % 32 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "log file read length is not a multiple of 32",
+            ));
+        }
+        let mut entries = Vec::with_capacity(buf.len() / 32);
+        for chunk in buf.chunks_exact(32) {
+            let mut h = [0_u8; 32];
+            h.copy_from_slice(chunk);
+            entries.push(h);
+        }
+        Ok(entries)
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MerkleLog
+// ────────────────────────────────────────────────────────────────────────
+
+/// Append-only Merkle log. Generic over the [`Store`] backend; defaults
+/// to [`MemStore`] for backward compatibility with the v0.2 in-memory
+/// API. The in-memory `entries` cache mirrors the store so root +
+/// inclusion-proof computation are O(n) on RAM, not on disk.
+#[derive(Debug)]
+pub struct MerkleLog<S = MemStore> {
+    entries: Vec<Hash>,
+    store: S,
+}
+
+impl Default for MerkleLog<MemStore> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MerkleLog<MemStore> {
+    /// Construct an in-memory log. v0.2 API.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            store: MemStore::default(),
+        }
+    }
+
+    /// Append an entry. Returns its position (0-indexed). Infallible
+    /// for the in-memory backend; preserves the v0.2 API.
     pub fn append(&mut self, entry: Hash) -> u64 {
-        let pos = self.entries.len() as u64;
+        let pos = self
+            .store
+            .append(entry)
+            .unwrap_or_else(|never| match never {});
         self.entries.push(entry);
         pos
     }
+}
 
+impl MerkleLog<FileStore> {
+    /// Open a file-backed log at `path`. The file is created if it
+    /// doesn't exist; if it exists, every previously-appended entry
+    /// is loaded into the in-memory mirror.
+    ///
+    /// # Errors
+    ///
+    /// I/O errors from opening or reading the file, or `InvalidData`
+    /// if the file is corrupt (size not a multiple of 32).
+    pub fn open<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let store = FileStore::open(path)?;
+        let entries = store.read_all()?;
+        Ok(Self { entries, store })
+    }
+
+    /// Append an entry. Fails if the underlying disk write or fsync
+    /// fails. On `Ok`, the entry is durable.
+    ///
+    /// # Errors
+    ///
+    /// I/O errors from `write_all` or `sync_data`.
+    pub fn append(&mut self, entry: Hash) -> std::io::Result<u64> {
+        let pos = self.store.append(entry)?;
+        self.entries.push(entry);
+        Ok(pos)
+    }
+}
+
+// Read-side methods are independent of the store; they operate on the
+// in-memory mirror.
+impl<S> MerkleLog<S> {
     /// Total number of entries appended.
     #[must_use]
     pub fn len(&self) -> u64 {
