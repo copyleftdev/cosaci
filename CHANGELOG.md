@@ -10,7 +10,98 @@ bumps. v1.0 onward, each crate versions independently.
 
 ## [Unreleased]
 
-Nothing yet.
+In-progress v0.2.0 work, accumulating since the v0.1.0 tag. Each
+section below corresponds to a merged PR; the version isn't tagged
+until the v0.2 milestone closes (see `docs/ROADMAP.md`).
+
+### Added — workspace + crate boundaries (#1, #2, #3, #4)
+
+- 5-library + 3-binary Cargo workspace. `cosaci-core` (algebra +
+  crypto primitives), `cosaci-state` (lifecycle: leases, registry,
+  aggregator, partition, replicated cluster, replay, rate limit,
+  sharding, sharding-handoff), `cosaci-protocol` (CBOR envelope +
+  rustls mTLS + rcgen test CA + CRL helpers), `cosaci-vrf`
+  (schnorrkel sr25519), `cosaci-wasm` (wasmtime).
+- Bins live under `bins/cosaci-{coordinator,agent,demo}` with
+  short `[[bin]]` names (`coordinator`, `agent`, `demo`,
+  `demo_networked`).
+- Heavy deps (`wasmtime`, `schnorrkel`, `rustls`, `rcgen`) only
+  pulled by the crates that actually need them — verified via
+  `cargo tree -p cosaci-core`.
+- Meta-crate is a thin re-export shim that keeps the existing 32
+  integration tests + benches compiling against `cosaci::*` paths.
+
+### Added — persistent coordinator + SIGTERM drain (#5)
+
+- Coordinator is no longer one-shot: after the fleet registers,
+  it enters a job loop, reuses agent connections across jobs,
+  and only exits on `--max-jobs` or SIGINT/SIGTERM.
+- `signal-hook`-driven drain flag checked at every iteration
+  boundary: in-flight job finishes, loop exits, agents get a
+  Shutdown envelope, exit code 0. Verified end-to-end in
+  `demo_networked`'s two-pass run.
+
+### Added — real WASM payloads in Assign (#6)
+
+- `Envelope::Assign` carries `module: Vec<u8>` (binary `.wasm`)
+  and `args_cbor: Vec<u8>` instead of `(a, b)`. Wire ABI v0.2
+  documented in `cosaci-wasm`: modules export
+  `add(i32, i32) -> i32`; args decode from CBOR `(i32, i32)`.
+- `output_hash(module_hash, result)` binds the output to the
+  module that produced it, so two committee members executing
+  different modules can never quorum on the same artifact.
+- `MAX_ENVELOPE_BYTES` raised 1 MiB → 16 MiB to fit real modules.
+- New Hegel property: `different_modules_disambiguate_outputs`
+  encodes the module-hash binding as a falsifiable claim.
+
+### Added — VRF-proof committee verification (#7)
+
+- Replaces the SHA-256(vrf_pk || seed) pseudo-VRF committee
+  selection with real verifiable VRFs. `Register` now carries a
+  proof of possession over a fixed challenge string; the
+  coordinator runs a per-job VRF round (`JobSeed` → `VrfClaim`)
+  and verifies every proof before picking the committee as
+  top-k by lexicographically smallest VRF output.
+- New `Envelope::JobSeed` and `Envelope::VrfClaim` variants.
+
+### Added — cert rotation + CRL hooks (#8)
+
+- `cosaci-protocol::tls`: `read_crls`,
+  `server_config_from_paths_with_crl`, `server_config_with_crls`,
+  `TestCa::issue_crl`. CRL plumbing is verified by two new
+  Hegel properties: `revoked_client_cert_is_rejected` and
+  `non_revoked_client_cert_succeeds_with_crl`.
+- Coordinator `--crl <path>` flag + SIGHUP-triggered hot reload
+  of the cert/key/CRL bundle. Existing TLS connections survive
+  the swap by design; only new handshakes pick up the new config.
+
+### Changed — code quality + audit gates (#9, #10, #11, #12, #13)
+
+- Workspace-wide `clippy::pedantic` gate via
+  `[workspace.lints.clippy]`. Each blanket allow has a
+  justification comment in `Cargo.toml`.
+- `deny.toml` curated with allow-listed licenses (MIT,
+  Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, MPL-2.0,
+  Unicode-3.0/DFS-2016, CDLA-Permissive-2.0); two RUSTSEC IDs
+  ignored with rationale (paste, rustls-pemfile unmaintained).
+  CI's `cargo deny check` flipped from advisory
+  (`continue-on-error: true`) to a real gate.
+- `.rustfmt.toml` makes the implicit fmt policy explicit
+  (edition 2024, max_width 100, stable-only options).
+- Every public item across the five lib crates carries a
+  docstring; `#![deny(missing_docs)]` enforces this at build
+  time, not just CI.
+- `rust-toolchain.toml` pins Rust 1.94.0 + rustfmt + clippy.
+  Local builds and CI run against identical compiler versions;
+  no MSRV creep when a new stable lands.
+
+### Changed — protocol envelope shapes
+
+The wire protocol is **not** stable across v0.1 → v0.2.
+`Envelope::Assign` and `Envelope::Register` both gained fields
+this cycle (module bytes / VRF proofs); this is a clean break,
+no compatibility shim. The cosaci crates are `publish = false`
+so this only matters to in-tree callers.
 
 ## [0.1.0] — 2026-04-24
 
