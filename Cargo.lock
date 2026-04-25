@@ -362,9 +362,9 @@ version = "0.2.0-alpha.1"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
+ "cosaci-vrf",
  "cosaci-wasm",
  "rustls",
- "sha2 0.11.0",
  "signal-hook",
 ]
 
@@ -402,6 +402,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "serde",
+ "serde-big-array",
 ]
 
 [[package]]

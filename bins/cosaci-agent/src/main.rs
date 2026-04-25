@@ -19,7 +19,7 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use cosaci_core::attestation::{Attestation, AttestationResult};
 use cosaci_core::quorum::RunnerId;
 use cosaci_core::signing::Keypair;
-use cosaci_protocol::proto::{Envelope, read_envelope, write_envelope};
+use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_vrf::vrf::VrfKeypair;
 use cosaci_wasm::wasm_runtime::{execute, module_hash, output_hash};
@@ -64,18 +64,23 @@ fn main() -> std::io::Result<()> {
         .map_err(|e| std::io::Error::other(format!("ClientConnection::new: {e}")))?;
     let mut stream: ClientStream = ClientStream::new(conn, tcp);
 
-    // Register
+    // Register — produce a VRF proof of possession for the fixed
+    // registration challenge so the coordinator can verify we own the
+    // claimed VRF pubkey before counting our stake.
+    let (reg_vrf_output, reg_vrf_proof) = vrf.evaluate(VRF_REGISTRATION_CHALLENGE);
     write_envelope(
         &mut stream,
         &Envelope::Register {
             runner_id,
             signing_pubkey: signing_pk,
             vrf_pubkey: vrf_pk,
+            vrf_output: reg_vrf_output,
+            vrf_proof: reg_vrf_proof,
             stake,
         },
     )?;
     match read_envelope(&mut stream)? {
-        Envelope::RegisterAck => println!("[agent {id}] registered (mTLS ✓)"),
+        Envelope::RegisterAck => println!("[agent {id}] registered (mTLS ✓, VRF ✓)"),
         other => {
             eprintln!("[agent {id}] expected RegisterAck, got {other:?}");
             return Ok(());
@@ -92,6 +97,20 @@ fn main() -> std::io::Result<()> {
             }
         };
         match env {
+            Envelope::JobSeed { job_id, seed } => {
+                // Coordinator wants every fleet member's VRF output for
+                // this seed before it picks the committee. Reply with a
+                // proof; coordinator will verify before counting us.
+                let (output, proof) = vrf.evaluate(&seed);
+                write_envelope(
+                    &mut stream,
+                    &Envelope::VrfClaim {
+                        job_id,
+                        vrf_output: output,
+                        vrf_proof: proof,
+                    },
+                )?;
+            }
             Envelope::Assign {
                 job_id,
                 module,

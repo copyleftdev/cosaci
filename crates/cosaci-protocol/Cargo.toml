@@ -9,9 +9,10 @@ description = "CosaCI: wire protocol (CBOR envelopes) + mTLS transport (rustls)"
 publish     = false
 
 [dependencies]
-cosaci-core    = { path = "../cosaci-core" }
-ciborium       = { workspace = true }
-rcgen          = { workspace = true }
-rustls         = { workspace = true }
-rustls-pemfile = { workspace = true }
-serde          = { workspace = true }
+cosaci-core     = { path = "../cosaci-core" }
+ciborium        = { workspace = true }
+rcgen           = { workspace = true }
+rustls          = { workspace = true }
+rustls-pemfile  = { workspace = true }
+serde           = { workspace = true }
+serde-big-array = { workspace = true }
