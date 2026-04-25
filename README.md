@@ -135,6 +135,12 @@ The networked demo prints a running ledger of registrations, VRF rounds,
 committee selections, attestations, quorum outcomes, and Merkle anchors —
 roughly 50 jobs/second on a developer laptop with 5 agents.
 
+For deploying CosaCI onto your own infrastructure (Docker, Compose,
+systemd, or Kubernetes), see **[`docs/RUNBOOK.md`](docs/RUNBOOK.md)** —
+bootstrap, runner enrollment, cert rotation, CRL update, disaster
+recovery, debugging, capacity planning. The deployment artifacts
+themselves are under [`contrib/`](contrib/).
+
 ## Project status
 
 **v0.2** is what's in `main` today. The system runs end-to-end over real
