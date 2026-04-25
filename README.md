@@ -1,5 +1,11 @@
 # CosaCI
 
+[![CI](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
+[![Audit trail](https://img.shields.io/badge/hypothesis_cards-35%2F38_passing-brightgreen)](hypotheses/index.md)
+[![Rust 2024 / 1.94](https://img.shields.io/badge/rust-1.94_(2024_edition)-orange.svg)](rust-toolchain.toml)
+
 > **CI you can prove ran honestly — on machines you already own.** A
 > distributed, attested execution mesh for builds and tests, designed to
 > run on the laptops and workstations sitting idle in your office instead
