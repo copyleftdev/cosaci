@@ -144,10 +144,13 @@ cargo build --release -p cosaci-agent
 # fingerprints from its registration log.
 ```
 
-> **PARTIAL — admin CLI deferred (#53).** v0.3 has no
-> `cosaci-admin` binary, so the next two steps are manual file
-> edits. v0.4 will let you do `cosaci-admin enroll
-> --signing-fingerprint <hex> --vrf-fingerprint <hex> --runner-id N`.
+> **v0.3 admin CLI (#53):** filesystem-only — `cosaci-admin enroll`
+> writes directly to `enrollment.txt`, `cosaci-admin revoke`
+> removes a record, `cosaci-admin agents list` shows the current
+> set. The wire-protocol form (talking to a running coordinator
+> over TLS) lands when `#46` (AuthN) + the Admin* envelope
+> variants ship; v0.3 operators run the CLI on the coordinator
+> host with read/write access to the enrollment file.
 
 ### 2b. Compute the fingerprints
 
@@ -157,19 +160,50 @@ The fingerprints are SHA-256 of each pubkey:
   64 lowercase hex chars)
 - `vrf_fp     = SHA-256(schnorrkel_sr25519_pubkey_bytes)`
 
-For v0.3, the easiest way to capture them is to:
+The simplest way to capture them in v0.3:
 
-1. Run the agent once against an empty enrollment file (the
-   coordinator will reject it).
-2. Read the rejection log line on the coordinator:
+1. Run the agent once against the (possibly empty) enrollment
+   file. The coordinator rejects with:
    `[coordinator] rejecting unenrolled agent runner_id=N from peer
    (signing_fp=…, vrf_fp=…)`.
-3. Append the fingerprints to `/etc/cosaci/enrollment.txt`.
+2. Copy the two `…` hex strings into the enroll command below.
 
-### 2c. Append to the enrollment file
+### 2c. Enroll the runner
 
-The v0.3 enrollment file format is whitespace-separated, one record
-per line:
+```bash
+sudo cosaci-admin agents enroll \
+    --enrollment /etc/cosaci/enrollment.txt \
+    --runner-id     <N> \
+    --signing-fp    <signing_fp_hex> \
+    --vrf-fp        <vrf_fp_hex> \
+    --reputation    1.0
+```
+
+The CLI:
+
+- Refuses if `runner_id` is already enrolled (use `revoke` first
+  if you mean to replace).
+- Validates fingerprint hex (64 chars each).
+- Writes atomically (tempfile + rename) — an interrupted run
+  leaves either the original or the new file, never partial.
+
+To list current enrollments:
+
+```bash
+sudo cosaci-admin agents list --enrollment /etc/cosaci/enrollment.txt
+```
+
+To revoke:
+
+```bash
+sudo cosaci-admin agents revoke \
+    --enrollment /etc/cosaci/enrollment.txt \
+    --runner-id <N>
+```
+
+The on-disk file format (whitespace-separated, comments with `#`,
+one record per line) is documented; you can hand-edit it if
+needed:
 
 ```
 # /etc/cosaci/enrollment.txt
@@ -523,7 +557,7 @@ jobs/min per coordinator.
 
 | Section | What's missing | Tracking issue |
 |---|---|---|
-| 2 | `cosaci-admin enroll` / `revoke` CLI | #53 |
+| 2 | `cosaci-admin` wire-protocol form (talks to running coord) | #53 (file-only landed) |
 | 2 | Runtime enrollment reload (no restart) | #45 follow-on |
 | 5 | Job-queue durability + mid-job replay | #51 |
 | 6 | Prometheus metrics + OTLP traces | #47 |

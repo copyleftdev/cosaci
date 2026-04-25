@@ -1,0 +1,24 @@
+[package]
+name        = "cosaci-admin"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI admin CLI — enrollment management + log inspection (filesystem-only for v0.3)"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "admin", "cli", "enrollment"]
+categories  = ["command-line-utilities"]
+publish     = false
+
+[dependencies]
+cosaci-core  = { path = "../../crates/cosaci-core" }
+cosaci-state = { path = "../../crates/cosaci-state" }
+
+# Short bin name; the runbook + dockerfile examples expect this.
+[[bin]]
+name = "cosaci-admin"
+path = "src/main.rs"
+
+[lints]
+workspace = true

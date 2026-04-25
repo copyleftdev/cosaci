@@ -13,6 +13,7 @@ members = [
     "crates/cosaci-vrf",
     "crates/cosaci-wasm",
     "crates/cosaci-jobs",
+    "bins/cosaci-admin",
     "bins/cosaci-coordinator",
     "bins/cosaci-agent",
     "bins/cosaci-demo",

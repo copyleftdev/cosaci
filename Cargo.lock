@@ -349,6 +349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosaci-admin"
+version = "0.2.0"
+dependencies = [
+ "cosaci-core",
+ "cosaci-state",
+]
+
+[[package]]
 name = "cosaci-agent"
 version = "0.2.0"
 dependencies = [

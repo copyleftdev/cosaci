@@ -102,6 +102,13 @@ impl EnrollmentSet {
         self.records.get(&runner_id)
     }
 
+    /// Iterate every enrolled record. Iteration order is unspecified
+    /// (HashMap-backed); callers that need deterministic order
+    /// should sort by `runner_id`.
+    pub fn iter(&self) -> impl Iterator<Item = &EnrolledRecord> {
+        self.records.values()
+    }
+
     /// True iff `runner_id` is enrolled AND the supplied fingerprints
     /// match the enrolled values exactly. A matching `runner_id` with
     /// any divergent fingerprint returns `false` — this catches
