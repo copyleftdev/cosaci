@@ -12,6 +12,22 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — operator runbook (#48)
+
+- New `docs/RUNBOOK.md` with eight sections: bootstrap, adding a
+  runner, cert rotation, CRL update, disaster recovery, debugging
+  a stuck job, slashing review, capacity planning.
+- Each section is a numbered procedure with concrete commands +
+  expected output. Sections that depend on un-shipped features
+  (`cosaci-admin` CLI #53, observability #47, slashing #35,
+  job-queue durability #51) are explicitly marked **PARTIAL** or
+  **DEFERRED** with the tracking issue cited inline; what's
+  shippable today (Docker/systemd from #49, enrollment from #45,
+  cert + CRL hot-reload from #8, persistent log from #33, read
+  API from #44) is fully covered.
+- README's "Try it" section now cross-refs the runbook for
+  operators standing up CosaCI on their own infrastructure.
+
 ### Added — deployment artifacts: Docker + Compose + systemd (#49)
 
 - `contrib/docker/Dockerfile.coordinator` and
