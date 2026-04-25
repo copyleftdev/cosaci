@@ -5,5 +5,17 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI coordinator binary (stub — code arrives in #4)"
+description = "CosaCI coordinator binary — accepts agent attestations, runs quorum, anchors to Merkle log"
 publish     = false
+
+[dependencies]
+cosaci-core     = { path = "../../crates/cosaci-core" }
+cosaci-protocol = { path = "../../crates/cosaci-protocol" }
+rustls          = { workspace = true }
+sha2            = { workspace = true }
+
+# `coordinator` (not `cosaci-coordinator`) — the demo_networked subprocess
+# launcher and existing CLI examples expect this short name.
+[[bin]]
+name = "coordinator"
+path = "src/main.rs"

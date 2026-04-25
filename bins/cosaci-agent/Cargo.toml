@@ -5,5 +5,17 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI agent binary (stub — code arrives in #4)"
+description = "CosaCI agent binary — registers with coordinator over mTLS, executes WASM jobs, returns signed attestations"
 publish     = false
+
+[dependencies]
+cosaci-core     = { path = "../../crates/cosaci-core" }
+cosaci-protocol = { path = "../../crates/cosaci-protocol" }
+cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
+cosaci-wasm     = { path = "../../crates/cosaci-wasm" }
+rustls          = { workspace = true }
+
+# Short bin name to match demo_networked's subprocess launcher.
+[[bin]]
+name = "agent"
+path = "src/main.rs"

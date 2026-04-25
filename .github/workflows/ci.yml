@@ -74,14 +74,17 @@ jobs:
           shared-key: "ubuntu-stable"
 
       - name: Build coordinator + agent + demo_networked
-        run: cargo build --bin coordinator --bin agent --bin demo_networked
+        run: |
+          cargo build -p cosaci-coordinator --bin coordinator
+          cargo build -p cosaci-agent       --bin agent
+          cargo build -p cosaci-demo        --bin demo_networked
 
       # End-to-end smoke test: launches the networked demo, ensures it
       # produces the expected outcome line within 30s, and exits 0.
       - name: Run networked demo
         run: |
           set -euo pipefail
-          OUT=$(timeout 30 cargo run --quiet --bin demo_networked 2>&1)
+          OUT=$(timeout 30 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
           echo "$OUT"
           echo "$OUT" | grep -q "quorum outcome Pass"
           echo "$OUT" | grep -q "Inclusion proof verification: ok\|anchored at position"
