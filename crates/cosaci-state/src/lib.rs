@@ -1,5 +1,17 @@
-//! `cosaci-state` — stateful subsystems.
+#![forbid(unsafe_code)]
+
+//! `cosaci-state` — stateful subsystems for CosaCI.
 //!
-//! Stub crate. Modules will move here in PR 2 of the workspace split
-//! (see issue #2). Until then, the source of truth is the `cosaci`
-//! crate at the workspace root.
+//! Modules with mutable state (leases, registries, aggregators, partitions,
+//! sharding/handoff, replay windows, rate limiters, replicated cluster).
+//! Depends on `cosaci-core` for shared primitives (clock, quorum, bloom).
+
+pub mod aggregator;
+pub mod lease;
+pub mod partition;
+pub mod rate_limit;
+pub mod registry;
+pub mod replay;
+pub mod replicated_cluster;
+pub mod sharding;
+pub mod sharding_handoff;

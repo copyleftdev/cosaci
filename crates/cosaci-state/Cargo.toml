@@ -5,5 +5,8 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI: stateful subsystems (stub — modules arrive in #2)"
+description = "CosaCI: stateful subsystems (leases, registries, partitions, sharding)"
 publish     = false
+
+[dependencies]
+cosaci-core = { path = "../cosaci-core" }

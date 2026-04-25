@@ -13,7 +13,7 @@
 //! constructor disables this (by setting `max_retries = u32::MAX`) so
 //! existing call sites keep their prior semantics.
 
-use crate::quorum::{self, Outcome as QuorumOutcome, StakeMap, Vote, Weight};
+use cosaci_core::quorum::{self, Outcome as QuorumOutcome, StakeMap, Vote, Weight};
 
 /// Externally-visible state of an aggregating job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
