@@ -42,6 +42,7 @@ criterion        = { version = "0.8.2", features = ["html_reports"] }
 hegeltest        = "0.8.0"
 rand             = "0.10.1"
 rand_chacha      = "0.10.0"
+signal-hook      = "0.3.18"
 
 # ─── Root package: cosaci v0.1.0 ────────────────────────────────────────
 # Stays as the source of truth until issues #2/#3/#4 redistribute the
