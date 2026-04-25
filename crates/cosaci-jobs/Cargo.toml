@@ -1,0 +1,23 @@
+[package]
+name        = "cosaci-jobs"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI: typed job-pipeline DSL — Pipeline / Step / Limits / StepOutput"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "pipeline", "wasm", "cbor"]
+categories  = ["data-structures", "development-tools::build-utils"]
+publish     = false
+
+[dependencies]
+cosaci-core     = { path = "../cosaci-core" }
+cosaci-wasm     = { path = "../cosaci-wasm" }
+ciborium        = { workspace = true }
+serde           = { workspace = true }
+serde-big-array = { workspace = true }
+sha2            = { workspace = true }
+
+[lints]
+workspace = true

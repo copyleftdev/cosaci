@@ -96,7 +96,9 @@ fn main() -> std::io::Result<()> {
         agents.len()
     );
 
-    // Pre-compile both canned modules and alternate per job.
+    // Pre-compile both canned modules and alternate per job. Each job
+    // ships a single-step `ExecWasm` pipeline; future job submissions
+    // (#32) will let external clients ship their own pipelines.
     let add_wasm = canned_add_module().expect("canned add module");
     let mul_wasm = canned_mul_module().expect("canned mul module");
 
@@ -112,11 +114,18 @@ fn main() -> std::io::Result<()> {
             &mul_wasm
         };
         let args = encode_args(job_a, job_b).expect("encode args");
+        let pipeline = cosaci_jobs::Pipeline {
+            steps: vec![cosaci_jobs::Step::ExecWasm {
+                module: module.clone(),
+                args_cbor: args,
+                limits: cosaci_jobs::Limits::default(),
+            }],
+        };
         match run_one_job(
             job_id,
             committee_size,
+            pipeline,
             module,
-            &args,
             &mut agents,
             &stake_map,
             &mut log,
@@ -231,14 +240,18 @@ fn accept_fleet(
 fn run_one_job(
     job_id: u64,
     committee_size: usize,
-    module: &[u8],
-    args_cbor: &[u8],
+    pipeline: cosaci_jobs::Pipeline,
+    log_module: &[u8],
     agents: &mut [RegisteredAgent],
     stake_map: &StakeMap,
     log: &mut MerkleLog,
 ) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
-    let mh = cosaci_wasm::wasm_runtime::module_hash(module);
+    // log_module is the leading WASM module bytes — used only for the
+    // human-readable hash prefix in the log line. Once jobs carry
+    // arbitrary pipelines the log line should switch to the pipeline's
+    // canonical hash.
+    let mh = cosaci_wasm::wasm_runtime::module_hash(log_module);
 
     // ── Phase 2a: VRF round — ask every agent for VRF(job_seed) ────────
     // The committee is chosen by the actual VRF outputs, not by hashing
@@ -296,9 +309,10 @@ fn run_one_job(
         .map(|(id, _)| *id)
         .collect();
     println!(
-        "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes)",
+        "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes), pipeline ({} step(s))",
         &mh[..4],
-        module.len()
+        log_module.len(),
+        pipeline.steps.len()
     );
 
     // ── Phase 2c: broadcast Assign to committee ────────────────────────
@@ -309,8 +323,7 @@ fn run_one_job(
                 &mut ag.stream,
                 &Envelope::Assign {
                     job_id,
-                    module: module.to_vec(),
-                    args_cbor: args_cbor.to_vec(),
+                    pipeline: pipeline.clone(),
                     deadline_unix_ns: deadline,
                 },
             )?;

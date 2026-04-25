@@ -29,6 +29,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `attestation-canonicalization` | §10.2 | A | **passing** | `tests/attestation_canonicalization.rs` | ciborium + sha2 + serde-big-array |
 | `status-lifecycle` | §11.2 | A | **passing** | `tests/status_lifecycle.rs` | — |
 | `det-exec-verifier` | §6.1a | A | **passing** | `tests/det_exec_verifier.rs` | rs_merkle 1.5 |
+| `pipeline-determinism` | §6.2 | A | encoded | `tests/pipeline_determinism.rs` | cosaci-jobs (#39) |
 
 ## Tier 1 — Scale primitives (8 cards, all A)
 

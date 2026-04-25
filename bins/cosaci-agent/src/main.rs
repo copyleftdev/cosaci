@@ -22,7 +22,6 @@ use cosaci_core::signing::Keypair;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_vrf::vrf::VrfKeypair;
-use cosaci_wasm::wasm_runtime::{execute, module_hash, output_hash};
 
 type ClientStream = StreamOwned<ClientConnection, TcpStream>;
 
@@ -113,19 +112,15 @@ fn main() -> std::io::Result<()> {
             }
             Envelope::Assign {
                 job_id,
-                module,
-                args_cbor,
+                pipeline,
                 deadline_unix_ns,
             } => {
-                let mh = module_hash(&module);
                 println!(
-                    "[agent {id}] assigned job {job_id}: module={:02x?}… ({} bytes)",
-                    &mh[..4],
-                    module.len()
+                    "[agent {id}] assigned job {job_id}: pipeline ({} step(s))",
+                    pipeline.steps.len()
                 );
-                let result = execute(&module, &args_cbor)
-                    .map_err(|e| std::io::Error::other(format!("wasm: {e}")))?;
-                let artifact = output_hash(&mh, result);
+                let result = cosaci_jobs::execute_pipeline(&pipeline)
+                    .map_err(|e| std::io::Error::other(format!("pipeline: {e:?}")))?;
                 let mut att = Attestation {
                     version: Attestation::VERSION,
                     job_id: u64_to_uuid(job_id),
@@ -133,7 +128,7 @@ fn main() -> std::io::Result<()> {
                     runner_id,
                     result: AttestationResult::Pass,
                     environment_hash: [0xee; 32],
-                    artifact_hash: artifact,
+                    artifact_hash: result.final_artifact_hash,
                     timestamp_unix_ns: deadline_unix_ns,
                     signature: [0_u8; 64],
                 };

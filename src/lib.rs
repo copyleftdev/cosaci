@@ -26,4 +26,6 @@ pub use cosaci_protocol::{proto, tls};
 // Re-export from cosaci-vrf (issue #3).
 pub use cosaci_vrf::vrf;
 // Re-export from cosaci-wasm (issue #3).
+/// Re-export of the typed pipeline DSL crate (issue #39).
+pub use cosaci_jobs as jobs;
 pub use cosaci_wasm::wasm_runtime;
