@@ -15,8 +15,9 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -26,9 +27,16 @@ use cosaci_core::merkle_log::MerkleLog;
 use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
-use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths};
+use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
+
+/// Atomic-swap holder for the current `ServerConfig`. SIGHUP triggers
+/// a re-read of the cert/key/CRL paths and an atomic replacement here.
+/// Existing TLS connections keep their own copy of the verifier and
+/// are unaffected; only NEW `ServerConnection::new` calls pick up the
+/// reload.
+type SharedServerConfig = Arc<Mutex<Arc<ServerConfig>>>;
 
 type ServerStream = StreamOwned<ServerConnection, TcpStream>;
 
@@ -48,6 +56,10 @@ fn main() -> std::io::Result<()> {
     let ca_path = arg_or(&args, "--ca", "ca.pem");
     let cert_path = arg_or(&args, "--cert", "server.pem");
     let key_path = arg_or(&args, "--key", "server.key.pem");
+    // `--crl <path>` is optional. A missing path is treated as "no
+    // revocations". SIGHUP rereads this same path, so an operator can
+    // hot-add revocations by writing the file and signaling the coord.
+    let crl_path = arg_or(&args, "--crl", "");
     let fleet: u64 = arg_or(&args, "--fleet", "5").parse().expect("fleet u64");
     let committee_size: usize = arg_or(&args, "--committee", "3")
         .parse()
@@ -62,15 +74,22 @@ fn main() -> std::io::Result<()> {
     let draining = Arc::new(AtomicBool::new(false));
     install_signal_handlers(draining.clone())?;
 
-    let server_cfg: Arc<ServerConfig> =
-        server_config_from_paths(&ca_path, &cert_path, &key_path)
-            .map_err(|e| std::io::Error::other(format!("server config: {e}")))?;
+    // Initial server config; will be hot-swappable via SIGHUP.
+    let initial_cfg = build_server_config(&ca_path, &cert_path, &key_path, &crl_path)?;
+    let shared_cfg: SharedServerConfig = Arc::new(Mutex::new(initial_cfg));
+    install_sighup_reloader(
+        shared_cfg.clone(),
+        ca_path.clone(),
+        cert_path.clone(),
+        key_path.clone(),
+        crl_path.clone(),
+    )?;
 
     println!("[coordinator] listening on {addr} (mTLS)");
     let listener = TcpListener::bind(&addr)?;
 
     // ── Phase 1: accept fleet + verify registration VRF proofs ─────────────
-    let mut agents = accept_fleet(&listener, &server_cfg, fleet)?;
+    let mut agents = accept_fleet(&listener, &shared_cfg, fleet)?;
     let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
     println!(
         "[coordinator] fleet assembled ({} agents, all VRF-attested)",
@@ -132,14 +151,17 @@ fn main() -> std::io::Result<()> {
 
 fn accept_fleet(
     listener: &TcpListener,
-    server_cfg: &Arc<ServerConfig>,
+    shared_cfg: &SharedServerConfig,
     fleet: u64,
 ) -> std::io::Result<Vec<RegisteredAgent>> {
     let mut agents: Vec<RegisteredAgent> = Vec::with_capacity(fleet as usize);
     while agents.len() < fleet as usize {
         let (tcp, peer) = listener.accept()?;
         tcp.set_nodelay(true)?;
-        let conn = match ServerConnection::new(server_cfg.clone()) {
+        // Snapshot the current config — picks up SIGHUP-driven swaps
+        // for new connections without affecting any already established.
+        let cfg_snapshot = shared_cfg.lock().expect("shared cfg poisoned").clone();
+        let conn = match ServerConnection::new(cfg_snapshot) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("[coordinator] ServerConnection::new for {peer}: {e}");
@@ -376,6 +398,60 @@ fn install_signal_handlers(draining: Arc<AtomicBool>) -> std::io::Result<()> {
     flag::register(SIGINT, draining.clone())?;
     flag::register(SIGTERM, draining)?;
     Ok(())
+}
+
+/// Spawn a thread that blocks on SIGHUP and, on each signal, re-reads
+/// the cert/key/CRL paths and atomically swaps the shared config.
+/// Existing connections retain the old verifier (rustls copies what
+/// it needs at connection construction time); only new
+/// `ServerConnection::new` calls pick up the rotation.
+fn install_sighup_reloader(
+    shared_cfg: SharedServerConfig,
+    ca_path: String,
+    cert_path: String,
+    key_path: String,
+    crl_path: String,
+) -> std::io::Result<()> {
+    use signal_hook::consts::SIGHUP;
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGHUP])?;
+    thread::spawn(move || {
+        for _sig in signals.forever() {
+            match build_server_config(&ca_path, &cert_path, &key_path, &crl_path) {
+                Ok(new_cfg) => {
+                    *shared_cfg.lock().expect("shared cfg poisoned") = new_cfg;
+                    eprintln!(
+                        "[coordinator] SIGHUP: server config reloaded (cert={cert_path}, crl={})",
+                        if crl_path.is_empty() {
+                            "<none>"
+                        } else {
+                            crl_path.as_str()
+                        }
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[coordinator] SIGHUP: reload failed ({e}); keeping previous config");
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+fn build_server_config(
+    ca_path: &str,
+    cert_path: &str,
+    key_path: &str,
+    crl_path: &str,
+) -> std::io::Result<Arc<ServerConfig>> {
+    let crl_arg: Option<&str> = if crl_path.is_empty() {
+        None
+    } else {
+        Some(crl_path)
+    };
+    server_config_from_paths_with_crl(ca_path, cert_path, key_path, crl_arg)
+        .map_err(|e| std::io::Error::other(format!("server config: {e}")))
 }
 
 // ────────────────────────────────────────────────────────────────────────
