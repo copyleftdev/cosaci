@@ -75,10 +75,11 @@ impl VrfKeypair {
     /// under the same key gives the same output. The proof is *not*
     /// deterministic (the underlying Schnorr signature uses randomness)
     /// but every proof from this `(key, input)` pair verifies.
+    #[must_use]
     pub fn evaluate(&self, input: &[u8]) -> (VrfOutput, VrfProofBytes) {
         let t = transcript(input);
-        let (inout, proof, _batchable) = self.keypair.vrf_sign(t);
-        let output = *inout.as_output_bytes();
+        let (signed, proof, _batchable) = self.keypair.vrf_sign(t);
+        let output = *signed.as_output_bytes();
         let proof_bytes = proof.to_bytes();
         (output, proof_bytes)
     }

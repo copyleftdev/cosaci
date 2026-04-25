@@ -41,8 +41,7 @@ pub fn is_allowed(from: Status, to: Status) -> bool {
         (from, to),
         (Status::Pending, Status::Running)
             | (Status::Running, Status::QuorumVerifying)
-            | (Status::QuorumVerifying, Status::Success)
-            | (Status::QuorumVerifying, Status::Failure)
+            | (Status::QuorumVerifying, Status::Success | Status::Failure)
     )
 }
 

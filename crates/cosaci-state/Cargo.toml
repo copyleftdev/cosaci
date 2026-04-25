@@ -10,3 +10,6 @@ publish     = false
 
 [dependencies]
 cosaci-core = { path = "../cosaci-core" }
+
+[lints]
+workspace = true

@@ -13,3 +13,6 @@ ciborium = { workspace = true }
 sha2     = { workspace = true }
 wasmtime = { workspace = true }
 wat      = { workspace = true }
+
+[lints]
+workspace = true

@@ -8,6 +8,13 @@
 //! Run with `cargo bench --bench hot_paths`. Baseline numbers live in
 //! the card's `baseline_ns:` frontmatter.
 
+// `c.bench_function("name", |b| b.iter(...))` is the standard
+// criterion pattern; the closure's tail expression is a unit-returning
+// `b.iter(...)` call. Pedantic flags every one of these as
+// "missing trailing `;`" — there's nothing to gain by sprinkling
+// semicolons through every benchmark.
+#![allow(clippy::semicolon_if_nothing_returned)]
+
 use std::collections::HashMap;
 
 use std::hint::black_box;

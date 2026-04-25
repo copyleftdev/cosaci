@@ -351,6 +351,14 @@ pub fn server_config_with_crls(
 
 /// Build a client config that trusts `trust_roots` for server verification
 /// and authenticates with `client_cert`.
+//
+// `Arc<RootCertStore>` is taken by value to match the existing
+// public API and the symmetry with `server_config`. We clone the
+// inner store (rustls's builder consumes by value); the Arc itself
+// is moved in for that purpose. Pedantic flags this as "passed by
+// value but not consumed", but consuming via `Arc::try_unwrap` would
+// be more cumbersome than informative.
+#[allow(clippy::needless_pass_by_value)]
 pub fn client_config(
     client_cert: &IssuedCert,
     trust_roots: Arc<RootCertStore>,
@@ -365,6 +373,8 @@ pub fn client_config(
 
 /// Build a client config with NO client cert (for testing the
 /// "connection with no cert → rejected" claim).
+#[must_use]
+#[allow(clippy::needless_pass_by_value)]
 pub fn client_config_no_cert(trust_roots: Arc<RootCertStore>) -> Arc<ClientConfig> {
     let cfg = ClientConfig::builder()
         .with_root_certificates((*trust_roots).clone())

@@ -106,7 +106,7 @@ impl<C: Clock + Clone> TwoReplicaCluster<C> {
     /// authoritative.
     pub fn heal(&mut self) {
         if self.partitioned {
-            let minority = self.other_side(self.majority);
+            let minority = Self::other_side(self.majority);
             let fresh = LeaseManager::new(self.clock.clone(), self.ttl_ns);
             *self.replica_mut(minority) = fresh;
         }
@@ -151,10 +151,10 @@ impl<C: Clock + Clone> TwoReplicaCluster<C> {
     }
 
     fn other_mut(&mut self, side: Side) -> &mut LeaseManager<C> {
-        self.replica_mut(self.other_side(side))
+        self.replica_mut(Self::other_side(side))
     }
 
-    fn other_side(&self, side: Side) -> Side {
+    fn other_side(side: Side) -> Side {
         match side {
             Side::A => Side::B,
             Side::B => Side::A,

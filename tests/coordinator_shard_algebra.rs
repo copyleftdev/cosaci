@@ -269,9 +269,11 @@ impl ShardTest {
                 // so we rely on `get` + shard_of.
                 if shard_of(k, n) == idx && self.subject.get(k).is_some() {
                     // Count this as found at idx.
-                    if found_in.is_some() && found_in != Some(idx) {
-                        panic!("key {} appears on multiple shards", k);
-                    }
+                    assert!(
+                        found_in.is_none() || found_in == Some(idx),
+                        "key {} appears on multiple shards",
+                        k
+                    );
                     found_in = Some(idx);
                 }
             }
