@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::clock::Clock;
+use cosaci_core::clock::Clock;
 
 pub type JobId = u64;
 pub type RunnerId = u64;

@@ -16,7 +16,8 @@
 //! module's contribution is that the **gating logic cannot silently admit
 //! minority-side writes**.
 
-use crate::clock::Clock;
+use cosaci_core::clock::Clock;
+
 use crate::lease::{JobId, LeaseError, LeaseId, LeaseManager, RunnerId};
 
 /// Which physical side of a partition a client lives on.

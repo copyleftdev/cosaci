@@ -1,5 +1,22 @@
-//! `cosaci-core` — pure algebra + crypto primitives.
+#![forbid(unsafe_code)]
+
+//! `cosaci-core` — pure algebra + crypto primitives for CosaCI.
 //!
-//! Stub crate. Modules will move here in PR 2 of the workspace split
-//! (see issue #2). Until then, the source of truth is the `cosaci`
-//! crate at the workspace root.
+//! No I/O, no network, no heavy deps. The bar for inclusion is "could
+//! plausibly be reused by a different distributed system." Each module
+//! is a stand-alone primitive backed by a Hegel property test under the
+//! root workspace's `tests/`.
+
+pub mod attestation;
+pub mod bloom;
+pub mod capabilities;
+pub mod clock;
+pub mod confidentiality;
+pub mod flake;
+pub mod gossip;
+pub mod merkle_log;
+pub mod quorum;
+pub mod reputation;
+pub mod signing;
+pub mod status;
+pub mod verifier;

@@ -22,7 +22,8 @@
 //! invariant "no persistent split-brain post-heal" has a falsifiable
 //! test; a production implementation would use Raft within each shard.
 
-use crate::clock::Clock;
+use cosaci_core::clock::Clock;
+
 use crate::lease::{JobId, LeaseError, LeaseManager, RunnerId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

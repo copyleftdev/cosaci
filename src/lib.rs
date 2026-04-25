@@ -5,30 +5,25 @@
 //! Public-infrastructure-scale CI execution fabric. Spec lives in `SPEC.md` at
 //! the crate root; every falsifiable claim is encoded as a Hegel property test
 //! under `tests/`, paired with a card under `hypotheses/`.
+//!
+//! As of v0.2 (issues #2/#3/#4), this meta-crate re-exports the modules that
+//! have moved to dedicated workspace crates. New code should depend on the
+//! per-crate paths directly (e.g. `cosaci_core::clock`); the re-exports below
+//! exist to keep the test suite + binaries compiling during the split.
 
-pub mod aggregator;
-pub mod attestation;
-pub mod bloom;
-pub mod capabilities;
-pub mod clock;
-pub mod confidentiality;
-pub mod flake;
-pub mod gossip;
-pub mod lease;
-pub mod merkle_log;
-pub mod partition;
+// Re-exports from cosaci-core (issue #2).
+pub use cosaci_core::{
+    attestation, bloom, capabilities, clock, confidentiality, flake, gossip, merkle_log, quorum,
+    reputation, signing, status, verifier,
+};
+// Re-exports from cosaci-state (issue #2).
+pub use cosaci_state::{
+    aggregator, lease, partition, rate_limit, registry, replay, replicated_cluster, sharding,
+    sharding_handoff,
+};
+
+// Modules still living in the meta-crate (move out in issues #3/#4).
 pub mod proto;
-pub mod quorum;
-pub mod rate_limit;
-pub mod registry;
-pub mod replay;
-pub mod replicated_cluster;
-pub mod reputation;
-pub mod sharding;
-pub mod sharding_handoff;
-pub mod signing;
-pub mod status;
 pub mod tls;
-pub mod verifier;
 pub mod vrf;
 pub mod wasm_runtime;

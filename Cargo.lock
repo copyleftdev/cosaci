@@ -335,6 +335,8 @@ version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
  "ciborium",
+ "cosaci-core",
+ "cosaci-state",
  "criterion",
  "ed25519-dalek",
  "hegeltest",
@@ -363,6 +365,15 @@ version = "0.2.0-alpha.1"
 [[package]]
 name = "cosaci-core"
 version = "0.2.0-alpha.1"
+dependencies = [
+ "chacha20poly1305",
+ "ciborium",
+ "ed25519-dalek",
+ "rs_merkle",
+ "serde",
+ "serde-big-array",
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "cosaci-demo"
@@ -375,6 +386,9 @@ version = "0.2.0-alpha.1"
 [[package]]
 name = "cosaci-state"
 version = "0.2.0-alpha.1"
+dependencies = [
+ "cosaci-core",
+]
 
 [[package]]
 name = "cosaci-vrf"
