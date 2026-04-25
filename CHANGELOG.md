@@ -12,6 +12,42 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — network egress policy evaluation (#54, partial)
+
+- `cosaci-jobs::network` (new module): `NetworkPolicy { allow,
+  default }`, `EgressTarget { Host, Cidr }`, `EgressDefault {
+  Deny, Audit }`, `Scheme { Http, Https, Tcp }`,
+  `EgressAttempt`, `Decision { Allow, Deny, Audit }`.
+- `evaluate(policy, attempt) -> Decision` — pure. Walks the
+  allowlist; first match wins; falls through to the default.
+  Hostname matches require exact equality (no wildcards in v0.3);
+  port `0` means "any port"; `Scheme::Tcp` matches any scheme.
+  Invalid CIDR strings match nothing — operator typos can't
+  silently widen the policy.
+- IPv4 `0.0.0.0/0` and IPv6 `::/0` match within their family
+  only; an "allow everything" policy adds both. Helper
+  `allow_all()` does this; `deny_all()` is `NetworkPolicy::default()`.
+- **Wire shape change.** `Limits.network` was previously
+  `enum NetworkPolicy { Deny, Allow }`; it's now the struct form.
+  `Limits` drops `Copy` (because `Vec<EgressTarget>` isn't Copy);
+  it remains `Clone`. The cosaci crates are `publish = false` so
+  this is a clean break, not a compatibility shim.
+- New hypothesis card `hypotheses/egress-policy-evaluation.md`
+  (class A, Tier 0). Eight Hegel properties + 2 deterministic
+  smoke tests, all green on first try: empty + Deny → Deny;
+  empty + Audit → Audit; Host match → Allow; Cidr match → Allow
+  (with non-match counter-test); direct-IP skips Host entries
+  (catches the "DNS-bypass" attack); invalid CIDRs don't widen
+  the policy; `/0` matches family-only; first match wins
+  regardless of position; realistic `cargo fetch` policy.
+- **Out of scope (follow-on PR):** Linux netns enforcement
+  (class C, gated on `HEGEL_LINUX_HARNESS=1`) — spawning the
+  step inside a network namespace and routing TCP through an
+  in-process proxy that calls `evaluate(...)` per connection.
+  Also deferred: `StepOutput::network_violations` field
+  (requires a wire shape change + canonical-encoding update;
+  populates only once enforcement lands).
+
 ### Added — partial committee tolerance (#61)
 
 - New `cosaci-state::partial_quorum` module: `PartialOutcome`,
