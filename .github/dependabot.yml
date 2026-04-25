@@ -1,0 +1,87 @@
+# Dependabot configuration for the cosaci workspace.
+#
+# Two ecosystems: cargo (the workspace) and github-actions (the CI
+# workflow). We pin the toolchain via rust-toolchain.toml so
+# Dependabot doesn't churn it; the cargo updater only handles
+# direct dependencies declared in [workspace.dependencies] +
+# per-crate manifests.
+#
+# Schedule weekly (Monday) so a single PR review cycle absorbs the
+# week's updates rather than one PR per dep change. Bump policy:
+# minor + patch grouped; major held for a human (a major bump on
+# `wasmtime` or `rustls` means we re-read the changelog and decide,
+# not auto-merge).
+
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 5
+    labels:
+      - "kind/chore"
+      - "area/build"
+    groups:
+      # Group the trust-load-bearing crypto stack so a major-version
+      # change comes in one PR with all transitive bumps visible.
+      crypto:
+        patterns:
+          - "ed25519-dalek"
+          - "schnorrkel"
+          - "merlin"
+          - "rustls"
+          - "rustls-pemfile"
+          - "rcgen"
+          - "ring"
+          - "sha2"
+          - "chacha20poly1305"
+      # Hegel + property-test toolchain.
+      testing:
+        patterns:
+          - "hegeltest"
+          - "criterion"
+          - "rand"
+          - "rand_chacha"
+          - "tempfile"
+      # Everything else: minor + patch grouped, majors separate.
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "ed25519-dalek"
+          - "schnorrkel"
+          - "merlin"
+          - "rustls"
+          - "rustls-pemfile"
+          - "rcgen"
+          - "sha2"
+          - "chacha20poly1305"
+          - "hegeltest"
+          - "criterion"
+          - "rand"
+          - "rand_chacha"
+          - "tempfile"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 3
+    labels:
+      - "kind/chore"
+      - "area/build"
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope

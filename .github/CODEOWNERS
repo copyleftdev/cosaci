@@ -1,0 +1,28 @@
+# Code ownership for review routing.
+#
+# Format: <pattern> <owner> [<owner>...]
+# Last matching pattern wins. See:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Catch-all default.
+*                                @copyleftdev
+
+# The trust-load-bearing crates. Changes here move the audit-trail
+# floor; reviewer attention is highest.
+/crates/cosaci-core/             @copyleftdev
+/crates/cosaci-protocol/         @copyleftdev
+/crates/cosaci-vrf/              @copyleftdev
+
+# The Hegel SSOT — every change here is a falsifiability claim that
+# the reviewer must be able to argue for or against.
+/hypotheses/                     @copyleftdev
+/tests/                          @copyleftdev
+
+# CI and release plumbing — small surface, high blast radius.
+/.github/                        @copyleftdev
+/contrib/                        @copyleftdev
+
+# Spec + runbook are public-facing; require deliberate review.
+SPEC.md                          @copyleftdev
+docs/RUNBOOK.md                  @copyleftdev
+README.md                        @copyleftdev
