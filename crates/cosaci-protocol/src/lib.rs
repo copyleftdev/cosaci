@@ -1,5 +1,11 @@
-//! `cosaci-protocol` — wire protocol + TLS transport.
+#![forbid(unsafe_code)]
+
+//! `cosaci-protocol` — wire protocol + TLS transport for CosaCI.
 //!
-//! Stub crate. Modules will move here in PR 3 of the workspace split
-//! (see issue #3). Until then, the source of truth is the `cosaci`
-//! crate at the workspace root.
+//! `proto` defines the length-prefixed CBOR envelope between coordinator
+//! and agent; `tls` wraps `rustls` + `rcgen` for mTLS, including the
+//! test CA used by the networked demo. Heavy deps (`rustls`, `rcgen`,
+//! `rustls-pemfile`) are isolated here.
+
+pub mod proto;
+pub mod tls;

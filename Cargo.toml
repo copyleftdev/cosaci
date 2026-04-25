@@ -58,25 +58,17 @@ description = "Distributed attested CI mesh — property-tested at every layer (
 publish     = false
 
 [dependencies]
-# Workspace member crates the meta-crate re-exports (issue #2).
-cosaci-core      = { path = "crates/cosaci-core" }
-cosaci-state     = { path = "crates/cosaci-state" }
+# Workspace member crates the meta-crate re-exports (issues #2/#3).
+cosaci-core     = { path = "crates/cosaci-core" }
+cosaci-state    = { path = "crates/cosaci-state" }
+cosaci-protocol = { path = "crates/cosaci-protocol" }
+cosaci-vrf      = { path = "crates/cosaci-vrf" }
+cosaci-wasm     = { path = "crates/cosaci-wasm" }
 
-# Direct deps for modules still in the meta-crate (proto, tls, vrf, wasm).
-# These move out in issues #3/#4.
-chacha20poly1305 = { workspace = true }
-ciborium         = { workspace = true }
-ed25519-dalek    = { workspace = true }
-merlin           = { workspace = true }
-rcgen            = { workspace = true }
-rs_merkle        = { workspace = true }
-rustls           = { workspace = true }
-rustls-pemfile   = { workspace = true }
-schnorrkel       = { workspace = true }
-serde            = { workspace = true }
-serde-big-array  = { workspace = true }
-sha2             = { workspace = true }
-wasmtime         = { workspace = true }
+# Direct deps for the four binaries that still live in src/bin/. Bins
+# move out in issue #4; at that point this list collapses entirely.
+rustls = { workspace = true }
+sha2   = { workspace = true }
 
 [dev-dependencies]
 criterion   = { workspace = true }

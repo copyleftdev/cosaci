@@ -333,25 +333,17 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 name = "cosaci"
 version = "0.1.0"
 dependencies = [
- "chacha20poly1305",
- "ciborium",
  "cosaci-core",
+ "cosaci-protocol",
  "cosaci-state",
+ "cosaci-vrf",
+ "cosaci-wasm",
  "criterion",
- "ed25519-dalek",
  "hegeltest",
- "merlin",
  "rand 0.10.1",
  "rand_chacha 0.10.0",
- "rcgen",
- "rs_merkle",
  "rustls",
- "rustls-pemfile",
- "schnorrkel",
- "serde",
- "serde-big-array",
  "sha2 0.11.0",
- "wasmtime",
 ]
 
 [[package]]
@@ -382,6 +374,14 @@ version = "0.2.0-alpha.1"
 [[package]]
 name = "cosaci-protocol"
 version = "0.2.0-alpha.1"
+dependencies = [
+ "ciborium",
+ "cosaci-core",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+]
 
 [[package]]
 name = "cosaci-state"
@@ -393,10 +393,18 @@ dependencies = [
 [[package]]
 name = "cosaci-vrf"
 version = "0.2.0-alpha.1"
+dependencies = [
+ "merlin",
+ "schnorrkel",
+]
 
 [[package]]
 name = "cosaci-wasm"
 version = "0.2.0-alpha.1"
+dependencies = [
+ "sha2 0.11.0",
+ "wasmtime",
+]
 
 [[package]]
 name = "cpp_demangle"
