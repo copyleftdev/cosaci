@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1.7
+
+# Multi-stage build for the CosaCI coordinator. Produces a small
+# runtime image with no compiler toolchain, just the static-ish binary
+# and its runtime deps (libgcc + libssl, both pulled in by ring/rustls
+# transitively). Targets `linux/amd64` and `linux/arm64`.
+#
+# Build:
+#   docker buildx build \
+#       --platform linux/amd64,linux/arm64 \
+#       -f contrib/docker/Dockerfile.coordinator \
+#       -t ghcr.io/copyleftdev/cosaci-coordinator:dev \
+#       --load .
+#
+# (Use --push instead of --load to push to a registry.)
+
+ARG RUST_VERSION=1.94
+ARG DEBIAN_VERSION=bookworm
+
+FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
+
+# `pkg-config` + `libssl-dev` aren't actually needed (rustls uses ring,
+# not openssl) but `cc` + `make` are pulled in by some transitive build
+# scripts (cranelift). Install them up front.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        build-essential \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy the manifest layer first so dependency compilation caches when
+# only source changes. We copy every Cargo.toml + Cargo.lock and stub
+# out the source trees, then build to populate target/. The real
+# sources land in the second COPY so dep compilation isn't redone for
+# source-only changes.
+COPY Cargo.toml Cargo.lock ./
+COPY crates/cosaci-core/Cargo.toml      crates/cosaci-core/Cargo.toml
+COPY crates/cosaci-state/Cargo.toml     crates/cosaci-state/Cargo.toml
+COPY crates/cosaci-protocol/Cargo.toml  crates/cosaci-protocol/Cargo.toml
+COPY crates/cosaci-vrf/Cargo.toml       crates/cosaci-vrf/Cargo.toml
+COPY crates/cosaci-wasm/Cargo.toml      crates/cosaci-wasm/Cargo.toml
+COPY crates/cosaci-jobs/Cargo.toml      crates/cosaci-jobs/Cargo.toml
+COPY bins/cosaci-coordinator/Cargo.toml bins/cosaci-coordinator/Cargo.toml
+COPY bins/cosaci-agent/Cargo.toml       bins/cosaci-agent/Cargo.toml
+COPY bins/cosaci-demo/Cargo.toml        bins/cosaci-demo/Cargo.toml
+
+# Now the real sources.
+COPY src                              src
+COPY crates                           crates
+COPY bins                             bins
+COPY benches                          benches
+
+ARG TARGETPLATFORM
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p cosaci-coordinator --bin coordinator \
+    && cp /src/target/release/coordinator /usr/local/bin/coordinator
+
+# ─── Runtime image ────────────────────────────────────────────────────
+FROM debian:${DEBIAN_VERSION}-slim AS runtime
+
+# `ca-certificates` so an operator can verify external HTTPS endpoints
+# (audit-log mirrors, future webhook receivers); `libgcc-s1` is pulled
+# in by the binary's panic handler. Nothing else.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r cosaci \
+    && useradd -r -g cosaci -s /usr/sbin/nologin -d /var/lib/cosaci cosaci \
+    && mkdir -p /var/lib/cosaci /etc/cosaci \
+    && chown -R cosaci:cosaci /var/lib/cosaci /etc/cosaci
+
+COPY --from=builder /usr/local/bin/coordinator /usr/local/bin/coordinator
+
+USER cosaci
+WORKDIR /var/lib/cosaci
+
+# Default mTLS endpoint. Compose / k8s / systemd can override via -p
+# mappings or args. The coordinator binds whatever `--addr` is passed;
+# nothing magic about this port. The read-API port (issue #44) is
+# also exposed for operators who pass `--read-addr 0.0.0.0:7879`.
+EXPOSE 7878
+EXPOSE 7879
+
+# Sensible defaults for a containerized run. Operators bind-mount
+# certs at /etc/cosaci/*. Override the whole CMD to add flags that
+# land in subsequent v0.3 work (`--enrollment`, `--read-addr`,
+# `--log`) once the corresponding features merge.
+ENTRYPOINT ["/usr/local/bin/coordinator"]
+CMD [\
+    "--addr", "0.0.0.0:7878", \
+    "--ca",   "/etc/cosaci/ca.pem", \
+    "--cert", "/etc/cosaci/server.pem", \
+    "--key",  "/etc/cosaci/server.key.pem" \
+]

@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1.7
+
+# Multi-stage build for the CosaCI agent. Mirror of
+# Dockerfile.coordinator; differs only in the binary name and CMD.
+#
+# Build:
+#   docker buildx build \
+#       --platform linux/amd64,linux/arm64 \
+#       -f contrib/docker/Dockerfile.agent \
+#       -t ghcr.io/copyleftdev/cosaci-agent:dev \
+#       --load .
+
+ARG RUST_VERSION=1.94
+ARG DEBIAN_VERSION=bookworm
+
+FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        build-essential \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/cosaci-core/Cargo.toml      crates/cosaci-core/Cargo.toml
+COPY crates/cosaci-state/Cargo.toml     crates/cosaci-state/Cargo.toml
+COPY crates/cosaci-protocol/Cargo.toml  crates/cosaci-protocol/Cargo.toml
+COPY crates/cosaci-vrf/Cargo.toml       crates/cosaci-vrf/Cargo.toml
+COPY crates/cosaci-wasm/Cargo.toml      crates/cosaci-wasm/Cargo.toml
+COPY crates/cosaci-jobs/Cargo.toml      crates/cosaci-jobs/Cargo.toml
+COPY bins/cosaci-coordinator/Cargo.toml bins/cosaci-coordinator/Cargo.toml
+COPY bins/cosaci-agent/Cargo.toml       bins/cosaci-agent/Cargo.toml
+COPY bins/cosaci-demo/Cargo.toml        bins/cosaci-demo/Cargo.toml
+
+COPY src                              src
+COPY crates                           crates
+COPY bins                             bins
+COPY benches                          benches
+
+ARG TARGETPLATFORM
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p cosaci-agent --bin agent \
+    && cp /src/target/release/agent /usr/local/bin/agent
+
+# ─── Runtime image ────────────────────────────────────────────────────
+FROM debian:${DEBIAN_VERSION}-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r cosaci \
+    && useradd -r -g cosaci -s /usr/sbin/nologin -d /var/lib/cosaci cosaci \
+    && mkdir -p /var/lib/cosaci /etc/cosaci \
+    && chown -R cosaci:cosaci /var/lib/cosaci /etc/cosaci
+
+COPY --from=builder /usr/local/bin/agent /usr/local/bin/agent
+
+USER cosaci
+WORKDIR /var/lib/cosaci
+
+# Operators set --id, --addr, --server-name, and bind-mount the agent
+# cert + key. The entrypoint defers all of this to runtime args so a
+# single image can serve every fleet member.
+ENTRYPOINT ["/usr/local/bin/agent"]
+CMD [\
+    "--addr",        "coordinator:7878", \
+    "--ca",          "/etc/cosaci/ca.pem", \
+    "--cert",        "/etc/cosaci/agent.pem", \
+    "--key",         "/etc/cosaci/agent.key.pem", \
+    "--server-name", "cosaci.local", \
+    "--stake",       "100" \
+]

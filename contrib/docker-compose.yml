@@ -1,0 +1,178 @@
+# CosaCI demo Compose stack.
+#
+#   docker compose -f contrib/docker-compose.yml up --build
+#
+# Brings up:
+#   - bootstrap (init): generates a demo CA + per-fleet certs into a
+#     shared volume. Idempotent — re-runs are no-ops once /certs/ca.pem
+#     exists.
+#   - coordinator: 1 instance, mTLS on :7878.
+#   - agent-0..agent-4: 5 instances, each with its own demo cert.
+#
+# This is the non-Rust equivalent of `cargo run -p cosaci-demo --bin
+# demo_networked` — a hands-on smoke test of the full mesh. Production
+# deployments use the operator's PKI, not the bootstrap script.
+
+services:
+  bootstrap:
+    build:
+      context: ../
+      dockerfile: contrib/docker/Dockerfile.bootstrap
+    image: cosaci-bootstrap:dev
+    environment:
+      FLEET: "5"
+      SERVER_NAME: "cosaci.local"
+    volumes:
+      - certs:/certs
+
+  coordinator:
+    build:
+      context: ../
+      dockerfile: contrib/docker/Dockerfile.coordinator
+    image: cosaci-coordinator:dev
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "7878:7878"
+      - "7879:7879"
+    volumes:
+      - certs:/etc/cosaci:ro
+      - coord-data:/var/lib/cosaci
+    command:
+      - --addr
+      - 0.0.0.0:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/server.pem
+      - --key
+      - /etc/cosaci/server.key.pem
+      - --fleet
+      - "5"
+      - --committee
+      - "3"
+
+  agent-0:
+    build:
+      context: ../
+      dockerfile: contrib/docker/Dockerfile.agent
+    image: cosaci-agent:dev
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      coordinator:
+        condition: service_started
+    volumes:
+      - certs:/etc/cosaci:ro
+    command:
+      - --id
+      - "0"
+      - --addr
+      - coordinator:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/agent-0.pem
+      - --key
+      - /etc/cosaci/agent-0.key.pem
+      - --server-name
+      - cosaci.local
+      - --stake
+      - "100"
+
+  agent-1:
+    image: cosaci-agent:dev
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      coordinator: { condition: service_started }
+    volumes:
+      - certs:/etc/cosaci:ro
+    command:
+      - --id
+      - "1"
+      - --addr
+      - coordinator:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/agent-1.pem
+      - --key
+      - /etc/cosaci/agent-1.key.pem
+      - --server-name
+      - cosaci.local
+      - --stake
+      - "100"
+
+  agent-2:
+    image: cosaci-agent:dev
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      coordinator: { condition: service_started }
+    volumes:
+      - certs:/etc/cosaci:ro
+    command:
+      - --id
+      - "2"
+      - --addr
+      - coordinator:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/agent-2.pem
+      - --key
+      - /etc/cosaci/agent-2.key.pem
+      - --server-name
+      - cosaci.local
+      - --stake
+      - "100"
+
+  agent-3:
+    image: cosaci-agent:dev
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      coordinator: { condition: service_started }
+    volumes:
+      - certs:/etc/cosaci:ro
+    command:
+      - --id
+      - "3"
+      - --addr
+      - coordinator:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/agent-3.pem
+      - --key
+      - /etc/cosaci/agent-3.key.pem
+      - --server-name
+      - cosaci.local
+      - --stake
+      - "100"
+
+  agent-4:
+    image: cosaci-agent:dev
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      coordinator: { condition: service_started }
+    volumes:
+      - certs:/etc/cosaci:ro
+    command:
+      - --id
+      - "4"
+      - --addr
+      - coordinator:7878
+      - --ca
+      - /etc/cosaci/ca.pem
+      - --cert
+      - /etc/cosaci/agent-4.pem
+      - --key
+      - /etc/cosaci/agent-4.key.pem
+      - --server-name
+      - cosaci.local
+      - --stake
+      - "100"
+
+volumes:
+  certs:
+  coord-data:

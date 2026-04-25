@@ -1,0 +1,98 @@
+# systemd unit for the CosaCI coordinator.
+#
+# Install:
+#   sudo install -Dm0755 target/release/coordinator \
+#       /usr/local/bin/cosaci-coordinator
+#   sudo install -Dm0644 contrib/systemd/cosaci-coordinator.service \
+#       /etc/systemd/system/cosaci-coordinator.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cosaci-coordinator
+#
+# Configuration: edit /etc/cosaci/coordinator.env and reload. Drop-in
+# overrides at /etc/systemd/system/cosaci-coordinator.service.d/*.conf.
+
+[Unit]
+Description=CosaCI coordinator (distributed attested CI mesh)
+Documentation=https://github.com/copyleftdev/cosaci
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/cosaci-coordinator \
+    --addr ${COSACI_ADDR} \
+    --ca ${COSACI_CA} \
+    --cert ${COSACI_CERT} \
+    --key ${COSACI_KEY} \
+    --fleet ${COSACI_FLEET} \
+    --committee ${COSACI_COMMITTEE}
+
+# Operators set these via /etc/cosaci/coordinator.env (see Hardening
+# below for ReadOnlyPaths). Defaults match the Dockerfile.
+EnvironmentFile=-/etc/cosaci/coordinator.env
+Environment=COSACI_ADDR=0.0.0.0:7878
+Environment=COSACI_CA=/etc/cosaci/ca.pem
+Environment=COSACI_CERT=/etc/cosaci/server.pem
+Environment=COSACI_KEY=/etc/cosaci/server.key.pem
+Environment=COSACI_FLEET=5
+Environment=COSACI_COMMITTEE=3
+
+# Restart policy. SIGTERM triggers the in-coord drain; we give it
+# 30 seconds to finish the current job before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=5s
+
+# Identity. The coordinator runs as `cosaci`; the package install
+# step (or the operator) is expected to `useradd -r cosaci` first.
+User=cosaci
+Group=cosaci
+
+# Working directory + state. /var/lib/cosaci is for the persistent
+# Merkle log (issue #33) and the future job queue (issue #51).
+WorkingDirectory=/var/lib/cosaci
+StateDirectory=cosaci
+ConfigurationDirectory=cosaci
+LogsDirectory=cosaci
+
+# Hardening. The coordinator only needs read-only filesystem access
+# except for /var/lib/cosaci (state) and /var/log/cosaci (logs). It
+# only speaks TCP, never opens local sockets, and never executes
+# subprocesses. These flags are the strongest reasonable subset that
+# doesn't break any in-process functionality (rustls, schnorrkel,
+# wasmtime).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# ^ wasmtime needs JIT codegen — write-then-execute on the same
+# mapping is required. Disabling MDWE is the documented exception
+# (see wasmtime's deployment guide).
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ReadOnlyPaths=/etc/cosaci
+ReadWritePaths=/var/lib/cosaci /var/log/cosaci
+SystemCallArchitectures=native
+# A minimal syscall allowlist would be nice but interacts badly with
+# wasmtime's JIT. We rely on the namespace + filesystem hardening
+# above instead.
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
