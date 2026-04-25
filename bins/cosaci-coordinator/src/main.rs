@@ -27,12 +27,13 @@ use cosaci_core::capabilities::{
     Candidate, Capabilities, JobRequirements, Platform, Runtime, select_capability_aware_committee,
 };
 use cosaci_core::merkle_log::{FileStore, MerkleLog, hash_bytes};
-use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
+use cosaci_core::quorum::{Outcome, RunnerId, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::retrieval::{JobRecord, build_bundle};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
 use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
+use cosaci_state::stake_ledger::StakeLedger;
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
@@ -91,6 +92,13 @@ fn main() -> std::io::Result<()> {
     // the enrollment file at startup and reject any agent whose
     // `(runner_id, signing_fp, vrf_fp)` triple isn't on the list.
     let enrollment_path = arg_or(&args, "--enrollment", "");
+    // `--slash-fraction <f>` controls how much stake a runner loses
+    // when their attestation diverges from the consensus artifact
+    // (issue #35). Default 0.25 (== stake / 4 per the issue spec).
+    // Clamped to [0.0, 1.0]; 0.0 disables slashing.
+    let slash_fraction: f32 = arg_or(&args, "--slash-fraction", "0.25")
+        .parse()
+        .expect("slash-fraction f32");
 
     let enrollment: Option<Arc<EnrollmentSet>> = if enrollment_path.is_empty() {
         None
@@ -124,10 +132,16 @@ fn main() -> std::io::Result<()> {
 
     // ── Phase 1: accept fleet + verify registration VRF proofs ─────────────
     let mut agents = accept_fleet(&listener, &shared_cfg, fleet, enrollment.as_deref())?;
-    let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
+    // Stake ledger (issue #35): seeded from registration-time stakes,
+    // mutated as the job loop slashes minority disagreers. The
+    // quorum threshold is computed against the current ledger state,
+    // so a slashed runner's voting weight shrinks immediately.
+    let mut stake_ledger =
+        StakeLedger::from_stake_map(agents.iter().map(|a| (a.runner_id, a.stake)).collect());
     println!(
-        "[coordinator] fleet assembled ({} agents, all VRF-attested)",
-        agents.len()
+        "[coordinator] fleet assembled ({} agents, all VRF-attested, slash_fraction={})",
+        agents.len(),
+        slash_fraction
     );
 
     // Pre-compile both canned modules and alternate per job. Each job
@@ -196,7 +210,8 @@ fn main() -> std::io::Result<()> {
             demo_requirements.clone(),
             module,
             &mut agents,
-            &stake_map,
+            &mut stake_ledger,
+            slash_fraction,
             &log,
             &records,
         ) {
@@ -336,7 +351,8 @@ fn run_one_job(
     requirements: JobRequirements,
     log_module: &[u8],
     agents: &mut [RegisteredAgent],
-    stake_map: &StakeMap,
+    stake_ledger: &mut StakeLedger,
+    slash_fraction: f32,
     log: &Arc<Mutex<LogBackend>>,
     records: &Arc<Mutex<HashMap<u64, JobRecord>>>,
 ) -> std::io::Result<()> {
@@ -497,12 +513,13 @@ fn run_one_job(
             }
         })
         .collect();
+    let stake_snapshot = stake_ledger.as_stake_map();
     let committee_stake: Weight = committee
         .iter()
-        .map(|id| stake_map.get(id).copied().unwrap_or(0))
+        .map(|id| stake_snapshot.get(id).copied().unwrap_or(0))
         .sum();
     let threshold = (committee_stake * 2).div_ceil(3);
-    let outcome = aggregate(&votes, threshold, stake_map);
+    let outcome = aggregate(&votes, threshold, &stake_snapshot);
     let consensus_artifact = artifact_counts
         .iter()
         .max_by_key(|&(_, c)| *c)
@@ -512,6 +529,21 @@ fn run_one_job(
         "[coordinator] job {} outcome {:?} (threshold {}, committee stake {})",
         job_id, outcome, threshold, committee_stake
     );
+
+    // Slashing (issue #35). On a definitive outcome (Pass or Fail),
+    // any committee member whose attestation diverges from the
+    // consensus artifact loses `current_stake × slash_fraction`
+    // weight. The majority is untouched. Skipped on Escalate (no
+    // consensus to compare against).
+    if matches!(outcome, Outcome::Pass | Outcome::Fail) && slash_fraction > 0.0 {
+        let events = stake_ledger.slash_minority(consensus_artifact, &attestations, slash_fraction);
+        for event in &events {
+            println!(
+                "[coordinator] job {} slashed runner {} by {} ({} → {})",
+                job_id, event.runner_id, event.slashed, event.stake_before, event.stake_after
+            );
+        }
+    }
 
     if outcome == Outcome::Pass {
         // Compute pipeline_hash for the retrieval record. Canonical
