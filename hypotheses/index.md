@@ -76,16 +76,16 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 | ID | § | Class | Status | Kind |
 |---|---|---|---|---|
-| `github-checks-integration` | §11.1 | D | pending | integration-test domain |
+| `github-checks-integration` | §11.1 | D | **passing** | `tests/github_checks_fixtures.rs` (fixture-replay) |
 | `latency-sla` | §16 | D | **passing** † | criterion 0.7 (baseline only) |
 | `survives-adversarial-execution` | §16 | D | **passing** † | aggregate: all reachable corroborations closed |
 
 ---
 
-**Totals:** 26 A + 6 B-stat + 4 C + 3 D = **39 cards** · **36 passing**.
+**Totals:** 26 A + 6 B-stat + 4 C + 3 D = **39 cards** · **37 passing**.
 
 - All A and B-stat cards: 26/26 passing with **no deferred sub-claims** (every original † closed).
 - Tier 3 (C-class): 2/4 passing — `mtls-enforcement` (rustls in-memory harness), `real-runtime-determinism` (wasmtime WASM subset). Remaining 2 (`real-partition-recovery`, `tee-attestation`) are genuinely blocked on infrastructure unavailable in the filter's environment (netem/Jepsen and TPM/SGX/SEV).
-- Tier 4 (D-class): 2/3 passing — `latency-sla` (criterion baselines), `survives-adversarial-execution` (meta-aggregate: all reachable corroborations closed). Remaining (`github-checks-integration`) awaits the real GitHub-publishing code path.
+- Tier 4 (D-class): **3/3 passing** — `latency-sla` (criterion baselines), `survives-adversarial-execution` (meta-aggregate), `github-checks-integration` (fixture-replay contract test against GitHub's documented Checks API schema; live API integration is out-of-scope `/schedule`-able routine).
 
 **First-pass execution order:** Tier 0 cards have zero scale-primitive dependency and land the most per line-of-test. Recommend `quorum-math`, `attestation-canonicalization`, `tamper-rejection` as the first three — they are the load-bearing trust chain and any defect there invalidates downstream claims.

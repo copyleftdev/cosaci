@@ -1,0 +1,10 @@
+{
+  "name": "cosaci/build",
+  "head_sha": "abcdef0123456789abcdef0123456789abcdef01",
+  "status": "queued",
+  "details_url": "https://coord.example/jobs/42",
+  "output": {
+    "title": "CosaCI · Job 42",
+    "summary": "Job accepted; awaiting committee selection."
+  }
+}

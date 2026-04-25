@@ -18,8 +18,8 @@ pub use cosaci_core::{
 };
 // Re-exports from cosaci-state (issue #2).
 pub use cosaci_state::{
-    aggregator, enrollment, lease, partial_quorum, partition, rate_limit, registry, replay,
-    replicated_cluster, sharding, sharding_handoff, stake_ledger,
+    aggregator, enrollment, github_checks, lease, partial_quorum, partition, rate_limit, registry,
+    replay, replicated_cluster, sharding, sharding_handoff, stake_ledger,
 };
 // Re-exports from cosaci-protocol (issue #3).
 pub use cosaci_protocol::{proto, tls};

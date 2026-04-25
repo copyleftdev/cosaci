@@ -9,6 +9,7 @@
 
 pub mod aggregator;
 pub mod enrollment;
+pub mod github_checks;
 pub mod lease;
 pub mod partial_quorum;
 pub mod partition;

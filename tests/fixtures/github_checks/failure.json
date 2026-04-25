@@ -1,0 +1,11 @@
+{
+  "name": "cosaci/build",
+  "head_sha": "abcdef0123456789abcdef0123456789abcdef01",
+  "status": "completed",
+  "conclusion": "failure",
+  "details_url": "https://coord.example/jobs/42",
+  "output": {
+    "title": "CosaCI · Job 42",
+    "summary": "Fail quorum reached. Committee voted 2/3 fail; minority slashed."
+  }
+}
