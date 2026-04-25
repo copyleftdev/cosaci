@@ -12,6 +12,44 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — crash-recovery journal (#51, partial)
+
+- New `cosaci-state::journal` module: `JournalEntry` enum
+  (JobSubmitted / CommitteeSelected / AttestationReceived /
+  Aggregated / Anchored), `JournalOutcome`, `JobState`,
+  `JournalState`, `Journal::open` + `append` (NDJSON, fsync per
+  record), `replay(path) -> Vec<JournalEntry>`,
+  `reconstruct_state(&[entries]) -> JournalState`.
+- File format: newline-delimited JSON. One entry per line; lines
+  are `\n`-terminated; an unterminated trailing line (torn
+  mid-write) is silently skipped on replay — the `kill -9`
+  semantics. `sync_data` after every record before `append`
+  returns Ok.
+- `JournalState` exposes `pending_re_run()` (Submitted / InFlight)
+  and `pending_re_anchor()` (AggregatedNotAnchored) so a
+  recovering coordinator can decide which jobs to re-run vs
+  re-anchor. Anchored jobs surface in `anchored_jobs()` for
+  double-anchor rejection.
+- New hypothesis card `hypotheses/crash-recovery-soundness.md`
+  (class A, Tier 0). Seven Hegel properties + 1 smoke:
+  - Replay round-trips appended entries.
+  - Pure `reconstruct_state` agrees with disk-replay
+    `reconstruct_state(&replay(path))`.
+  - Lifecycle progression is monotone (Submitted → InFlight →
+    AggregatedNotAnchored → Anchored).
+  - Submitted/InFlight jobs surface in `pending_re_run`.
+  - AggregatedNotAnchored jobs surface in `pending_re_anchor`.
+  - Anchored jobs surface in `anchored_jobs`.
+  - Torn final write is skipped (valid prefix preserved).
+- `cosaci-state` now depends on `serde_json` directly (was a
+  workspace dep added by #38).
+- **Out of scope (follow-on PR):** Coordinator integration —
+  wiring `journal.append()` into `run_one_job` at every
+  transition + replay on startup. Touches the coord's main
+  loop, lands separately. Also: checkpoint+truncation (the
+  unbounded-growth mitigation), `--journal <path>` flag, and
+  the RUNBOOK §5 update with the concrete replay procedure.
+
 ### Added — GitHub Checks API contract via fixture replay (#38, partial)
 
 - New `cosaci-state::github_checks` module:
@@ -33,7 +71,7 @@ In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
   fails at PR time without a live GitHub API call.
 - `hypotheses/github-checks-integration.md` moves from `pending`
   to `passing` (class D, Tier 4 boundary card). Tier 4 is now
-  3/3 passing. Total audit trail: 39 cards · 37 passing.
+  3/3 passing.
 - New `serde_json` workspace dep (1.0.128) for the fixture
   comparison; `cosaci-state` depends on `serde` directly.
 - **Out of scope (follow-on):** the actual coordinator-side

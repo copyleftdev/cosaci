@@ -13,7 +13,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-## Tier 0 — Core algebra (18 cards, all A)
+## Tier 0 — Core algebra (20 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
@@ -37,6 +37,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `slashing-faithfulness` | §8.4 | A | **passing** | `tests/slashing_faithfulness.rs` | quorum-math + tamper-rejection (#35) |
 | `partial-committee-tolerance` | §8.5 | A | **passing** | `tests/partial_committee_tolerance.rs` | quorum-math (#61) |
 | `egress-policy-evaluation` | §6.4 | A | **passing** | `tests/egress_policy_evaluation.rs` | cosaci-jobs (#54, partial) |
+| `crash-recovery-soundness` | §10.5 | A | **passing** | `tests/crash_recovery_soundness.rs` | serde_json + tempfile (#51, partial) |
 
 ## Tier 1 — Scale primitives (8 cards, all A)
 
@@ -82,7 +83,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-**Totals:** 26 A + 6 B-stat + 4 C + 3 D = **39 cards** · **37 passing**.
+**Totals:** 27 A + 6 B-stat + 4 C + 3 D = **40 cards** · **38 passing**.
 
 - All A and B-stat cards: 26/26 passing with **no deferred sub-claims** (every original † closed).
 - Tier 3 (C-class): 2/4 passing — `mtls-enforcement` (rustls in-memory harness), `real-runtime-determinism` (wasmtime WASM subset). Remaining 2 (`real-partition-recovery`, `tee-attestation`) are genuinely blocked on infrastructure unavailable in the filter's environment (netem/Jepsen and TPM/SGX/SEV).
