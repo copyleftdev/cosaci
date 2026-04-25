@@ -169,6 +169,7 @@ impl HandoffStore {
         new_count + old_count
     }
 
+    /// Whether the handoff store holds zero keys.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

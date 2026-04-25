@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 //! `cosaci-wasm` — WebAssembly runtime harness for CosaCI payloads.
 //!

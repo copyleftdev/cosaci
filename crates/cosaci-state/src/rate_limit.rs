@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use cosaci_core::clock::Clock;
 
+/// Identifier of the tenant the rate limiter buckets are keyed on.
 pub type TenantId = u64;
 
 /// Per-tenant bucket. Not exposed; `RateLimiter` is the public surface.
@@ -67,6 +68,8 @@ pub struct RateLimiter<C: Clock> {
 }
 
 impl<C: Clock> RateLimiter<C> {
+    /// Construct a rate limiter with the given clock and per-tenant
+    /// bucket parameters (initial capacity + refill rate in tokens/sec).
     #[must_use]
     pub fn new(clock: C, capacity: u64, refill_per_sec: u64) -> Self {
         Self {
@@ -102,6 +105,7 @@ impl<C: Clock> RateLimiter<C> {
         }
     }
 
+    /// Configured per-tenant bucket capacity (peak burst).
     #[must_use]
     pub fn capacity(&self) -> u64 {
         self.default_capacity

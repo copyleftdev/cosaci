@@ -43,9 +43,13 @@ pub fn compute_root(leaves: &[LeafHash]) -> Option<LeafHash> {
 /// already knows the root to check whether a given leaf is in the set.
 #[derive(Clone, Debug)]
 pub struct InclusionProof {
+    /// The leaf this proof attests is in the tree.
     pub leaf: LeafHash,
+    /// 0-indexed position of `leaf` in the canonical-sorted leaf list.
     pub index: usize,
+    /// Sibling hashes along the path from leaf to root.
     pub proof_hashes: Vec<LeafHash>,
+    /// Total leaf count at the time the proof was issued.
     pub total_leaves: usize,
 }
 

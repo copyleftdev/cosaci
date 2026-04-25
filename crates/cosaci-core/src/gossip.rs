@@ -11,14 +11,22 @@
 
 use std::collections::HashMap;
 
+/// Opaque 64-bit key; in production this would be a hash of the
+/// referenced resource (job id, runner id, …).
 pub type Key = u64;
+/// 64-bit application payload — kept opaque at this layer; the LWW
+/// register doesn't interpret it.
 pub type Value = u64;
+/// Logical timestamp used for LWW resolution. Production wiring would
+/// supply a Lamport clock or HLC; v0.1 leaves the choice to the caller.
 pub type Timestamp = u64;
 
 /// One value, tagged with a logical timestamp for LWW resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
+    /// Payload at this entry's timestamp.
     pub value: Value,
+    /// Logical timestamp — higher wins under LWW.
     pub timestamp: Timestamp,
 }
 
@@ -29,6 +37,7 @@ pub struct NodeState {
 }
 
 impl NodeState {
+    /// Construct an empty node state.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -46,21 +55,25 @@ impl NodeState {
         }
     }
 
+    /// Lookup by key. `None` if absent.
     #[must_use]
     pub fn get(&self, key: Key) -> Option<Entry> {
         self.entries.get(&key).copied()
     }
 
+    /// Number of distinct keys in this node's view.
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether this node holds zero entries.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// Iterator over the keys this node currently knows about.
     pub fn keys(&self) -> impl Iterator<Item = Key> + '_ {
         self.entries.keys().copied()
     }

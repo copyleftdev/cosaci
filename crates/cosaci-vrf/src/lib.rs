@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 //! `cosaci-vrf` — VRF subsystem (schnorrkel sr25519).
 //!

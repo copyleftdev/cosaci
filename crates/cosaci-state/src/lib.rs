@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 //! `cosaci-state` — stateful subsystems for CosaCI.
 //!

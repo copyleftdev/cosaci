@@ -39,9 +39,13 @@ pub struct TestCa {
 /// A CA-signed certificate bundle with its private key. Owned, static
 /// lifetime for simple threading.
 pub struct IssuedCert {
+    /// DER-encoded certificate bytes (the cert itself).
     pub cert_der: CertificateDer<'static>,
+    /// DER-encoded PKCS#8 private key.
     pub key_der: PrivateKeyDer<'static>,
+    /// PEM-encoded certificate (convenience for writing to disk).
     pub cert_pem: String,
+    /// PEM-encoded private key.
     pub key_pem: String,
     /// The serial assigned by the issuing CA. Required to revoke this
     /// cert via [`TestCa::issue_crl`].
@@ -49,6 +53,11 @@ pub struct IssuedCert {
 }
 
 impl TestCa {
+    /// Generate a new self-signed test CA with the given common name.
+    ///
+    /// # Errors
+    ///
+    /// Propagates rcgen errors (key generation, certificate signing).
     pub fn generate(name: &str) -> Result<Self, rcgen::Error> {
         let signing_key = KeyPair::generate()?;
         let mut params = CertificateParams::new(Vec::<String>::new())?;
@@ -133,10 +142,12 @@ impl TestCa {
         Ok(crl.der().clone())
     }
 
+    /// DER-encoded CA certificate.
     pub fn cert_der(&self) -> &CertificateDer<'static> {
         &self.cert_der
     }
 
+    /// PEM-encoded CA certificate.
     pub fn cert_pem(&self) -> &str {
         &self.cert_pem
     }
@@ -464,4 +475,6 @@ pub fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// Canonical Subject Alternative Name used for server certs in this
+/// crate's helpers — matches the `ServerName` clients connect against.
 pub const SUBJECT_SERVER: &str = SERVER_NAME;

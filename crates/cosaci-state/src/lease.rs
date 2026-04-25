@@ -12,30 +12,44 @@ use std::collections::HashMap;
 
 use cosaci_core::clock::Clock;
 
+/// Identifier of the job a lease is for.
 pub type JobId = u64;
+/// Identifier of the runner holding (or attempting to hold) the lease.
 pub type RunnerId = u64;
+/// Opaque identifier for a single lease grant.
 pub type LeaseId = u64;
 
 /// Current state of a lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseState {
+    /// Lease is currently held; runner is authoritative for the job.
     Active,
+    /// Runner returned an attestation; lease is closed normally.
     Completed,
+    /// TTL elapsed before completion; lease was reaped on tick.
     Expired,
 }
 
 /// One lease record.
 #[derive(Clone, Copy, Debug)]
 pub struct Lease {
+    /// Unique identifier for this lease.
     pub lease_id: LeaseId,
+    /// Job the lease is for.
     pub job_id: JobId,
+    /// Runner the lease is granted to.
     pub runner_id: RunnerId,
+    /// Wall-clock time at acquisition (clock-injected ns).
     pub acquired_at_ns: u64,
+    /// Time-to-live in ns; `acquired_at_ns + ttl_ns` is the expiry.
     pub ttl_ns: u64,
+    /// Current state.
     pub state: LeaseState,
 }
 
 impl Lease {
+    /// Wall-clock expiry instant in ns. Saturating add to avoid overflow
+    /// for absurd TTLs.
     #[must_use]
     pub fn expires_at_ns(&self) -> u64 {
         self.acquired_at_ns.saturating_add(self.ttl_ns)
@@ -70,6 +84,8 @@ pub struct LeaseManager<C: Clock> {
 }
 
 impl<C: Clock> LeaseManager<C> {
+    /// Construct a manager with the given clock source and default TTL
+    /// in nanoseconds.
     #[must_use]
     pub fn new(clock: C, default_ttl_ns: u64) -> Self {
         Self {

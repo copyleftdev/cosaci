@@ -26,12 +26,16 @@ use cosaci_core::clock::Clock;
 
 use crate::lease::{JobId, LeaseError, LeaseManager, RunnerId};
 
+/// One of the two replica sides in [`TwoReplicaCluster`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
+    /// First replica.
     A,
+    /// Second replica.
     B,
 }
 
+/// Failure modes a `TwoReplicaCluster` operation can return.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterError {
     /// Target replica already has an active lease for this job.
@@ -46,6 +50,7 @@ impl From<LeaseError> for ClusterError {
     }
 }
 
+/// A two-replica cluster with explicit Connected / Partitioned states.
 pub struct TwoReplicaCluster<C: Clock + Clone> {
     replica_a: LeaseManager<C>,
     replica_b: LeaseManager<C>,
@@ -57,6 +62,8 @@ pub struct TwoReplicaCluster<C: Clock + Clone> {
 }
 
 impl<C: Clock + Clone> TwoReplicaCluster<C> {
+    /// Construct a connected (un-partitioned) cluster with both
+    /// replicas backed by fresh `LeaseManager`s sharing the same clock.
     #[must_use]
     pub fn new(clock: C, ttl_ns: u64) -> Self {
         Self {
@@ -113,6 +120,7 @@ impl<C: Clock + Clone> TwoReplicaCluster<C> {
         self.partitioned = false;
     }
 
+    /// Whether the cluster is currently in the partitioned state.
     #[must_use]
     pub fn is_partitioned(&self) -> bool {
         self.partitioned
