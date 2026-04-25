@@ -43,6 +43,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod network;
+pub use network::NetworkPolicy;
+
 /// Fuel-units-per-cpu-second translation factor for WASM execution
 /// (issue #43). One fuel unit ≈ one wasmtime instruction; modern x86
 /// runs ~10⁹ simple WASM ops per second, so this gives roughly
@@ -113,9 +116,13 @@ pub enum Step {
     },
 }
 
-/// Resource limits enforced per step. Default is "no enforcement"; real
-/// enforcement lands in issue #43.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Resource limits enforced per step. Default is "no enforcement"; WASM
+/// enforcement lands in issue #43, network egress in issue #54.
+///
+/// `Limits` is `Clone` (not `Copy`) because `network` carries an
+/// allowlist `Vec`. Cloning is cheap for typical policies (a handful
+/// of allowlist entries).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Limits {
     /// CPU-time limit in seconds. `0` means unlimited (default).
     pub cpu_seconds: u32,
@@ -123,20 +130,10 @@ pub struct Limits {
     pub memory_mb: u32,
     /// Wall-clock limit in seconds. `0` means unlimited (default).
     pub wall_seconds: u32,
-    /// Network egress policy. Default `NetworkPolicy::Deny` — issue #54
-    /// adds an `Allow` variant carrying an allowlist.
+    /// Network egress policy. Default is "deny everything" (see
+    /// [`NetworkPolicy::default`]); operators opt into specific
+    /// targets via `network.allow`. Issue #54.
     pub network: NetworkPolicy,
-}
-
-/// Network egress policy for a step.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum NetworkPolicy {
-    /// All egress denied. Default.
-    #[default]
-    Deny,
-    /// All egress allowed. v0.3 placeholder; issue #54 replaces this
-    /// with an allowlist variant.
-    Allow,
 }
 
 /// Result of one step's execution.
@@ -293,7 +290,7 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
                 module,
                 args_cbor,
                 limits,
-            } => execute_wasm_step(step_index, module, args_cbor, *limits, step)?,
+            } => execute_wasm_step(step_index, module, args_cbor, limits.clone(), step)?,
             Step::SourceFetch { .. } => not_implemented(step_index, step, StepKind::SourceFetch),
             Step::ExecNative { .. } => not_implemented(step_index, step, StepKind::ExecNative),
             Step::CaptureLog { .. } => not_implemented(step_index, step, StepKind::CaptureLog),
