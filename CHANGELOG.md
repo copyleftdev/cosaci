@@ -12,6 +12,37 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — slashing on detected dishonest attestation (#35)
+
+- New `cosaci-state::stake_ledger` module: `StakeLedger`,
+  `SlashEvent`, `slash_minority(consensus, attestations, fraction)`.
+  In-memory; persistence (file-backed Store) is a follow-on.
+- `slash_minority` is pure: minority disagreers (those whose
+  `attestation.artifact_hash != consensus_artifact`) lose
+  `floor(stake × fraction_clamped)` weight; majority untouched;
+  unenrolled runners produce no event. Saturates at zero.
+  `fraction` is clamped to `[0.0, 1.0]`.
+- Coordinator integration: `--slash-fraction <f>` flag (default
+  `0.25` per the issue spec, == stake / 4). After every job with
+  a definitive outcome (Pass or Fail), `run_one_job` calls
+  `ledger.slash_minority(...)` and logs each event:
+  `[coordinator] job N slashed runner R by D (B → A)`.
+- Quorum threshold + `aggregate(...)` now read from
+  `ledger.as_stake_map()` rather than the registration-time
+  snapshot, so a slashed runner's voting weight shrinks
+  immediately. Repeated dishonesty drops the runner toward zero;
+  a future selection layer can drop them out of the committee
+  pool entirely (issue #61 follow-on).
+- New hypothesis card `hypotheses/slashing-faithfulness.md`
+  (class A, Tier 0). Six Hegel properties + 1 smoke test:
+  disagreement → slash; agreement → no slash; saturation at zero;
+  fraction clamping above and below the legal range; unregistered
+  runner produces no event; ledger state matches events.
+- **Out of scope (follow-on):** disk-backed ledger persistence
+  across coord restarts; reputation-vs-stake separation
+  (currently slashing tracks raw stake; a soft-signal reputation
+  decay lands separately).
+
 ### Added — operator runbook (#48)
 
 - New `docs/RUNBOOK.md` with eight sections: bootstrap, adding a
