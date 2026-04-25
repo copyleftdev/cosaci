@@ -12,6 +12,35 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — resource-limit enforcement on WASM steps (#43)
+
+- New `cosaci-wasm::execute_with_limits(wasm, args, ExecLimits)` —
+  fuel + memory + wall enforcement on the existing `add(i32, i32)`
+  ABI. `ExecLimits { fuel, memory_bytes, wall: Duration }` (zero
+  means unlimited per axis).
+- Wasmtime mechanics: `Config::consume_fuel` + `Store::set_fuel`
+  for cpu, custom `ResourceLimiter` returning `Err` from
+  `memory_growing` for memory (so `memory.grow` past the cap traps
+  rather than silently returning -1), `Config::epoch_interruption`
+  + a 10ms-granularity timer thread for wall.
+- `cosaci-jobs::execute_wasm_step` translates `Limits` →
+  `ExecLimits` (cpu_seconds × `FUEL_PER_CPU_SECOND` (= 10⁹), MiB
+  → bytes, secs → `Duration`). On `LimitExceeded`, the step's
+  `output_hash` is the SHA-256 of canonical CBOR
+  `(step, LimitKind)` — two runners that hit the same kind agree;
+  flipping the kind diverges.
+- `execute()` is now a thin wrapper around
+  `execute_with_limits(..., ExecLimits::unlimited())`; the v0.2
+  `execute()` API is unchanged for callers.
+- New hypothesis card `hypotheses/resource-limit-enforcement.md`
+  (class A, Tier 0). Six Hegel properties: unlimited compliance,
+  cpu enforcement (spinning module), memory enforcement (grow
+  module), wall enforcement (spinning module, fuel disabled),
+  compliant within budget, output-hash distinguishes limit kind.
+  Plus an end-to-end `execute_pipeline` smoke test.
+- Native (cgroups v2 / setrlimit) enforcement is class C, gated on
+  a Linux harness, and lands in a follow-on PR.
+
 ### Added — persistent attestation log on disk (#33)
 
 - `cosaci-core::merkle_log` gains a `Store` trait + two impls:

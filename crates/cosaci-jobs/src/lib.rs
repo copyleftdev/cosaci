@@ -38,9 +38,18 @@
 //! once the executor lands without re-breaking the protocol.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+/// Fuel-units-per-cpu-second translation factor for WASM execution
+/// (issue #43). One fuel unit ≈ one wasmtime instruction; modern x86
+/// runs ~10⁹ simple WASM ops per second, so this gives roughly
+/// wall-time-aligned cpu accounting for compute-bound modules. The
+/// constant is conservative: I/O- or trap-bound modules will hit fuel
+/// faster in wall-time terms than this implies. Documented + tested.
+pub const FUEL_PER_CPU_SECOND: u64 = 1_000_000_000;
 
 /// One pipeline = an ordered list of steps. Steps execute in order;
 /// each step's `output_hash` is in the canonical input for the next
@@ -283,8 +292,8 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
             Step::ExecWasm {
                 module,
                 args_cbor,
-                limits: _,
-            } => execute_wasm_step(step_index, module, args_cbor)?,
+                limits,
+            } => execute_wasm_step(step_index, module, args_cbor, *limits, step)?,
             Step::SourceFetch { .. } => not_implemented(step_index, step, StepKind::SourceFetch),
             Step::ExecNative { .. } => not_implemented(step_index, step, StepKind::ExecNative),
             Step::CaptureLog { .. } => not_implemented(step_index, step, StepKind::CaptureLog),
@@ -306,20 +315,51 @@ fn execute_wasm_step(
     step_index: u32,
     module: &[u8],
     args_cbor: &[u8],
+    limits: Limits,
+    step: &Step,
 ) -> Result<StepOutput, PipelineError> {
-    let result = cosaci_wasm::wasm_runtime::execute(module, args_cbor).map_err(|e| {
+    use cosaci_wasm::wasm_runtime::{ExecLimitKind, ExecLimits, ExecOutcome, execute_with_limits};
+
+    let exec_limits = ExecLimits {
+        fuel: u64::from(limits.cpu_seconds).saturating_mul(FUEL_PER_CPU_SECOND),
+        memory_bytes: (limits.memory_mb as usize).saturating_mul(1024 * 1024),
+        wall: Duration::from_secs(u64::from(limits.wall_seconds)),
+    };
+
+    let outcome = execute_with_limits(module, args_cbor, exec_limits).map_err(|e| {
         PipelineError::WasmRuntime {
             step_index,
             detail: e,
         }
     })?;
-    let module_hash = cosaci_wasm::wasm_runtime::module_hash(module);
-    let output_hash = cosaci_wasm::wasm_runtime::output_hash(&module_hash, result);
-    Ok(StepOutput {
-        step_index,
-        status: StepStatus::Success,
-        output_hash,
-    })
+
+    match outcome {
+        ExecOutcome::Ok(result) => {
+            let module_hash = cosaci_wasm::wasm_runtime::module_hash(module);
+            let output_hash = cosaci_wasm::wasm_runtime::output_hash(&module_hash, result);
+            Ok(StepOutput {
+                step_index,
+                status: StepStatus::Success,
+                output_hash,
+            })
+        }
+        ExecOutcome::LimitExceeded(kind) => {
+            let which = match kind {
+                ExecLimitKind::Cpu => LimitKind::Cpu,
+                ExecLimitKind::Memory => LimitKind::Memory,
+                ExecLimitKind::Wall => LimitKind::Wall,
+            };
+            // Output hash for a limit-exceeded step binds (step bytes,
+            // limit kind). Two runners that hit the same limit on the
+            // same step produce the same hash; runners that didn't
+            // hit the limit produce a `Success` hash that's distinct.
+            Ok(StepOutput {
+                step_index,
+                status: StepStatus::LimitExceeded { which },
+                output_hash: hash_canonical(&(step, which)),
+            })
+        }
+    }
 }
 
 /// Construct a `StepOutput` for a step type whose executor isn't yet

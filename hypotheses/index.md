@@ -13,7 +13,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-## Tier 0 — Core algebra (12 cards, all A)
+## Tier 0 — Core algebra (13 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
@@ -29,8 +29,9 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `attestation-canonicalization` | §10.2 | A | **passing** | `tests/attestation_canonicalization.rs` | ciborium + sha2 + serde-big-array |
 | `status-lifecycle` | §11.2 | A | **passing** | `tests/status_lifecycle.rs` | — |
 | `det-exec-verifier` | §6.1a | A | **passing** | `tests/det_exec_verifier.rs` | rs_merkle 1.5 |
-| `pipeline-determinism` | §6.2 | A | encoded | `tests/pipeline_determinism.rs` | cosaci-jobs (#39) |
-| `capability-aware-committee` | §5.2b + §7.1 | A | encoded | `tests/capability_aware_committee.rs` | capability-match + vrf (#34) |
+| `pipeline-determinism` | §6.2 | A | **passing** | `tests/pipeline_determinism.rs` | cosaci-jobs (#39) |
+| `capability-aware-committee` | §5.2b + §7.1 | A | **passing** | `tests/capability_aware_committee.rs` | capability-match + vrf (#34) |
+| `resource-limit-enforcement` | §6.3 | A | **passing** | `tests/resource_limit_enforcement.rs` | wasmtime fuel + ResourceLimiter + epoch (#43) |
 
 ## Tier 1 — Scale primitives (8 cards, all A)
 
@@ -76,7 +77,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-**Totals:** 20 A + 6 B-stat + 4 C + 3 D = **33 cards** · **30 passing**.
+**Totals:** 21 A + 6 B-stat + 4 C + 3 D = **34 cards** · **31 passing**.
 
 - All A and B-stat cards: 26/26 passing with **no deferred sub-claims** (every original † closed).
 - Tier 3 (C-class): 2/4 passing — `mtls-enforcement` (rustls in-memory harness), `real-runtime-determinism` (wasmtime WASM subset). Remaining 2 (`real-partition-recovery`, `tee-attestation`) are genuinely blocked on infrastructure unavailable in the filter's environment (netem/Jepsen and TPM/SGX/SEV).
