@@ -98,9 +98,10 @@ impl TestCa {
     }
 
     /// Issue a CRL revoking the supplied certificates. The returned
-    /// DER bytes are suitable for either writing to disk (PEM-wrapped
-    /// via [`crl_to_pem`]) or passing directly to
-    /// [`server_config_with_crls`] / [`server_config_from_paths_with_crl`].
+    /// DER bytes are suitable for passing directly to
+    /// [`server_config_with_crls`] or for PEM-wrapping (`X509 CRL`
+    /// header) and writing to disk for
+    /// [`server_config_from_paths_with_crl`].
     ///
     /// # Errors
     ///
