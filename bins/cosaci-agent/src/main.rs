@@ -17,6 +17,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use cosaci_core::attestation::{Attestation, AttestationResult};
+use cosaci_core::capabilities::{Capabilities, Platform, Runtime};
 use cosaci_core::quorum::RunnerId;
 use cosaci_core::signing::Keypair;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
@@ -65,8 +66,16 @@ fn main() -> std::io::Result<()> {
 
     // Register — produce a VRF proof of possession for the fixed
     // registration challenge so the coordinator can verify we own the
-    // claimed VRF pubkey before counting our stake.
+    // claimed VRF pubkey before counting our stake. Capabilities are
+    // declared at the same time so the coordinator can filter
+    // committee candidates by job requirements (issue #34).
     let (reg_vrf_output, reg_vrf_proof) = vrf.evaluate(VRF_REGISTRATION_CHALLENGE);
+    let capabilities = Capabilities {
+        cpu: 4,
+        memory_mb: 4096,
+        platform: Platform::LinuxX86_64,
+        runtimes: [Runtime::Wasm].into_iter().collect(),
+    };
     write_envelope(
         &mut stream,
         &Envelope::Register {
@@ -76,6 +85,7 @@ fn main() -> std::io::Result<()> {
             vrf_output: reg_vrf_output,
             vrf_proof: reg_vrf_proof,
             stake,
+            capabilities,
         },
     )?;
     match read_envelope(&mut stream)? {
@@ -113,6 +123,7 @@ fn main() -> std::io::Result<()> {
             Envelope::Assign {
                 job_id,
                 pipeline,
+                requirements: _,
                 deadline_unix_ns,
             } => {
                 println!(

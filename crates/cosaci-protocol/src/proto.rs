@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 use cosaci_core::attestation::Attestation;
+use cosaci_core::capabilities::{Capabilities, JobRequirements};
 
 /// Fixed VRF challenge for the registration proof. Binds
 /// `(vrf_pubkey, this string)` to a unique output that only the
@@ -47,6 +48,10 @@ pub enum Envelope {
         vrf_proof: [u8; 64],
         /// Stake the runner is committing.
         stake: u64,
+        /// What this runner offers — platform, runtimes, cpu, memory.
+        /// Coordinator stores this and consults it when filtering
+        /// committee candidates by job requirements (issue #34).
+        capabilities: Capabilities,
     },
     /// Agent's VRF evaluation of the per-job seed. Sent in response to
     /// a [`Envelope::JobSeed`]. Coordinator collects claims from the
@@ -92,6 +97,12 @@ pub enum Envelope {
         job_id: u64,
         /// Typed pipeline definition.
         pipeline: cosaci_jobs::Pipeline,
+        /// What this job requires of a runner — platform, runtimes,
+        /// cpu, memory. Coordinator only sends `Assign` to runners
+        /// whose registered capabilities satisfy these requirements
+        /// (issue #34); the field is present on the wire so an agent
+        /// can sanity-check its own match before executing.
+        requirements: JobRequirements,
         /// Wall-clock deadline (unix ns) by which the attestation must
         /// be returned.
         deadline_unix_ns: i64,
