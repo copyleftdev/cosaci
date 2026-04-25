@@ -10,19 +10,30 @@ use std::fs;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rcgen::{CertificateParams, DnType, Issuer, KeyPair};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+use rcgen::{
+    CertificateParams, CertificateRevocationListParams, DnType, Issuer, KeyIdMethod, KeyPair,
+    RevocationReason, RevokedCertParams, SerialNumber,
+};
+use rustls::pki_types::{
+    CertificateDer, CertificateRevocationListDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName,
+};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
 
 const SERVER_NAME: &str = "cosaci.local";
 
-/// A self-signed CA — signs end-entity (client / server) certs.
+/// A self-signed CA — signs end-entity (client / server) certs and
+/// (issue #8) certificate revocation lists.
 pub struct TestCa {
     cert_der: CertificateDer<'static>,
     cert_pem: String,
     issuer: Issuer<'static, KeyPair>,
+    /// Monotonic serial counter — each `issue` call burns one. Stored
+    /// on the resulting [`IssuedCert`] so tests can later revoke by
+    /// serial without re-parsing the DER.
+    next_serial: AtomicU64,
 }
 
 /// A CA-signed certificate bundle with its private key. Owned, static
@@ -32,6 +43,9 @@ pub struct IssuedCert {
     pub key_der: PrivateKeyDer<'static>,
     pub cert_pem: String,
     pub key_pem: String,
+    /// The serial assigned by the issuing CA. Required to revoke this
+    /// cert via [`TestCa::issue_crl`].
+    pub serial: u64,
 }
 
 impl TestCa {
@@ -40,6 +54,9 @@ impl TestCa {
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params.distinguished_name.push(DnType::CommonName, name);
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        // Permit CRL signing by this CA — required by rcgen 0.14 when
+        // any key_usages are set; we keep the slot empty to stay
+        // permissive but still record the intent here.
         let cert = params.self_signed(&signing_key)?;
         let cert_der = cert.der().clone();
         let cert_pem = cert.pem();
@@ -48,18 +65,23 @@ impl TestCa {
             cert_der,
             cert_pem,
             issuer,
+            next_serial: AtomicU64::new(1),
         })
     }
 
     /// Issue a new end-entity certificate (client or server) bound to
     /// `subject_name`. For server certs this is the SAN; for client
-    /// certs it's informational.
+    /// certs it's informational. Each call consumes one monotonic
+    /// serial number, exposed on the returned [`IssuedCert`] for use
+    /// with [`TestCa::issue_crl`].
     pub fn issue(&self, subject_name: &str) -> Result<IssuedCert, rcgen::Error> {
         let key = KeyPair::generate()?;
         let mut params = CertificateParams::new(vec![subject_name.to_string()])?;
         params
             .distinguished_name
             .push(DnType::CommonName, subject_name);
+        let serial = self.next_serial.fetch_add(1, Ordering::Relaxed);
+        params.serial_number = Some(SerialNumber::from(serial));
         let cert = params.signed_by(&key, &self.issuer)?;
         let cert_der = cert.der().clone();
         let cert_pem = cert.pem();
@@ -71,7 +93,44 @@ impl TestCa {
             key_der,
             cert_pem,
             key_pem,
+            serial,
         })
+    }
+
+    /// Issue a CRL revoking the supplied certificates. The returned
+    /// DER bytes are suitable for passing directly to
+    /// [`server_config_with_crls`] or for PEM-wrapping (`X509 CRL`
+    /// header) and writing to disk for
+    /// [`server_config_from_paths_with_crl`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates rcgen errors (e.g. invalid signing key usage).
+    pub fn issue_crl(
+        &self,
+        revoked: &[&IssuedCert],
+    ) -> Result<CertificateRevocationListDer<'static>, rcgen::Error> {
+        use time::{Duration, OffsetDateTime};
+        let now = OffsetDateTime::now_utc();
+        let revoked_certs: Vec<RevokedCertParams> = revoked
+            .iter()
+            .map(|c| RevokedCertParams {
+                serial_number: SerialNumber::from(c.serial),
+                revocation_time: now,
+                reason_code: Some(RevocationReason::Unspecified),
+                invalidity_date: None,
+            })
+            .collect();
+        let params = CertificateRevocationListParams {
+            this_update: now,
+            next_update: now + Duration::days(7),
+            crl_number: SerialNumber::from(1_u64),
+            issuing_distribution_point: None,
+            revoked_certs,
+            key_identifier_method: KeyIdMethod::Sha256,
+        };
+        let crl = params.signed_by(&self.issuer)?;
+        Ok(crl.der().clone())
     }
 
     pub fn cert_der(&self) -> &CertificateDer<'static> {
@@ -145,6 +204,29 @@ pub fn read_private_key<P: AsRef<Path>>(path: P) -> std::io::Result<PrivateKeyDe
     })
 }
 
+/// Read PEM-encoded `X509 CRL` blocks into rustls DER form. Returns
+/// an empty vector if the file is missing — caller's responsibility
+/// to decide whether that's acceptable; the coordinator treats a
+/// missing CRL as "no revocations".
+///
+/// # Errors
+///
+/// I/O errors other than `NotFound`. A missing path returns `Ok(vec![])`.
+pub fn read_crls<P: AsRef<Path>>(
+    path: P,
+) -> std::io::Result<Vec<CertificateRevocationListDer<'static>>> {
+    let file = match fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut reader = BufReader::new(file);
+    let crls: Vec<CertificateRevocationListDer<'static>> = rustls_pemfile::crls(&mut reader)
+        .filter_map(Result::ok)
+        .collect();
+    Ok(crls)
+}
+
 /// Build a server config from PEM files: trust roots (CA), server
 /// certificate chain, server private key. Requires client authentication.
 ///
@@ -156,6 +238,28 @@ pub fn server_config_from_paths<P: AsRef<Path>>(
     cert_path: P,
     key_path: P,
 ) -> Result<Arc<ServerConfig>, String> {
+    server_config_from_paths_with_crl::<P>(ca_path, cert_path, key_path, None)
+}
+
+/// Same as [`server_config_from_paths`], plus an optional CRL path.
+/// When a CRL is supplied, the client cert verifier rejects any client
+/// presenting a serial number listed in the CRL during the TLS
+/// handshake — before any application data flows.
+///
+/// A `None` `crl_path` (or a missing file at the supplied path) means
+/// "no revocations"; the resulting config is identical to the no-CRL
+/// version. Callers that want to enforce strict revocation should
+/// require a CRL file to exist.
+///
+/// # Errors
+///
+/// I/O errors from the PEM files, or rustls config errors.
+pub fn server_config_from_paths_with_crl<P: AsRef<Path>>(
+    ca_path: P,
+    cert_path: P,
+    key_path: P,
+    crl_path: Option<P>,
+) -> Result<Arc<ServerConfig>, String> {
     let ca_chain = read_cert_chain(ca_path).map_err(|e| format!("read CA: {e}"))?;
     let mut roots = RootCertStore::empty();
     for c in ca_chain {
@@ -163,7 +267,14 @@ pub fn server_config_from_paths<P: AsRef<Path>>(
     }
     let cert_chain = read_cert_chain(cert_path).map_err(|e| format!("read cert: {e}"))?;
     let key = read_private_key(key_path).map_err(|e| format!("read key: {e}"))?;
-    let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+    let mut builder = WebPkiClientVerifier::builder(Arc::new(roots));
+    if let Some(p) = crl_path {
+        let crls = read_crls(p).map_err(|e| format!("read CRL: {e}"))?;
+        if !crls.is_empty() {
+            builder = builder.with_crls(crls);
+        }
+    }
+    let verifier = builder
         .build()
         .map_err(|e| format!("client verifier: {e}"))?;
     let cfg = ServerConfig::builder()
@@ -211,7 +322,23 @@ pub fn server_config(
     server_cert: &IssuedCert,
     trust_roots: Arc<RootCertStore>,
 ) -> Result<Arc<ServerConfig>, String> {
-    let verifier = WebPkiClientVerifier::builder(trust_roots)
+    server_config_with_crls(server_cert, trust_roots, &[])
+}
+
+/// Same as [`server_config`], plus a slice of CRLs that the client
+/// cert verifier will consult during the handshake. Any client whose
+/// cert serial is listed in any supplied CRL is rejected before
+/// application data flows. Pass an empty slice for no revocations.
+pub fn server_config_with_crls(
+    server_cert: &IssuedCert,
+    trust_roots: Arc<RootCertStore>,
+    crls: &[CertificateRevocationListDer<'static>],
+) -> Result<Arc<ServerConfig>, String> {
+    let mut builder = WebPkiClientVerifier::builder(trust_roots);
+    if !crls.is_empty() {
+        builder = builder.with_crls(crls.to_vec());
+    }
+    let verifier = builder
         .build()
         .map_err(|e| format!("client verifier build: {e}"))?;
     let key = clone_key(&server_cert.key_der);
