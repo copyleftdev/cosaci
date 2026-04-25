@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 //! `cosaci-core` — pure algebra + crypto primitives for CosaCI.
 //!

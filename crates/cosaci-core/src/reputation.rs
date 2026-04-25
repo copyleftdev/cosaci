@@ -10,7 +10,9 @@
 /// final decision for that job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgreementOutcome {
+    /// Runner's vote matched the quorum outcome.
     Agree,
+    /// Runner's vote disagreed with the quorum outcome.
     Disagree,
 }
 

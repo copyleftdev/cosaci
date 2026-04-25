@@ -116,11 +116,13 @@ impl Aggregator {
         self.state
     }
 
+    /// Externally-visible state.
     #[must_use]
     pub fn state(&self) -> AggregationState {
         self.state
     }
 
+    /// Whether the aggregator has reached a terminal state.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(
@@ -129,16 +131,20 @@ impl Aggregator {
         )
     }
 
+    /// Number of votes received so far (post-terminal votes are not counted).
     #[must_use]
     pub fn vote_count(&self) -> usize {
         self.votes.len()
     }
 
+    /// Number of retry rounds the aggregator has consumed.
     #[must_use]
     pub fn retries(&self) -> u32 {
         self.retries
     }
 
+    /// Configured retry budget; once `retries() > max_retries()` the
+    /// aggregator forces `Escalate`.
     #[must_use]
     pub fn max_retries(&self) -> u32 {
         self.max_retries

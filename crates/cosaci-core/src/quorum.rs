@@ -27,14 +27,18 @@ pub type StakeMap = HashMap<RunnerId, Weight>;
 /// A runner's claim about a job's outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoteResult {
+    /// Runner observed the job pass.
     Pass,
+    /// Runner observed the job fail.
     Fail,
 }
 
 /// One vote submission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Vote {
+    /// Identifier of the runner casting the vote.
     pub runner_id: RunnerId,
+    /// Pass / Fail claim from this runner.
     pub result: VoteResult,
 }
 

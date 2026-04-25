@@ -23,7 +23,9 @@ use crate::lease::{JobId, LeaseError, LeaseId, LeaseManager, RunnerId};
 /// Which physical side of a partition a client lives on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
+    /// Side A of the partition.
     A,
+    /// Side B of the partition.
     B,
 }
 
@@ -54,6 +56,8 @@ pub struct Cluster<C: Clock> {
 }
 
 impl<C: Clock> Cluster<C> {
+    /// Construct a connected cluster (no partition) with the given
+    /// clock source and lease TTL.
     #[must_use]
     pub fn new(clock: C, ttl_ns: u64) -> Self {
         Self {

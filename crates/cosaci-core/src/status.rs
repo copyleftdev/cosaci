@@ -8,10 +8,15 @@
 /// External states published to the SCM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
+    /// Job has been accepted by the coordinator but not yet dispatched.
     Pending,
+    /// Job has been dispatched to a committee and is executing.
     Running,
+    /// Committee attestations are being aggregated for quorum.
     QuorumVerifying,
+    /// Terminal — quorum agreed the job passed.
     Success,
+    /// Terminal — quorum agreed the job failed (or escalation timed out).
     Failure,
 }
 
@@ -19,9 +24,17 @@ pub enum Status {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransitionError {
     /// The `(from, to)` pair is not in the allowed edge set.
-    IllegalTransition { from: Status, to: Status },
+    IllegalTransition {
+        /// State the machine was in.
+        from: Status,
+        /// State the caller asked to move to.
+        to: Status,
+    },
     /// Attempted to transition out of a terminal state (`Success` or `Failure`).
-    AlreadyTerminal { current: Status },
+    AlreadyTerminal {
+        /// The terminal state the machine is pinned to.
+        current: Status,
+    },
 }
 
 /// Whether the edge `from → to` is in the externally-allowed transition set.
@@ -66,6 +79,7 @@ impl Default for StatusMachine {
 }
 
 impl StatusMachine {
+    /// Construct a machine in `Pending`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -93,11 +107,14 @@ impl StatusMachine {
         Ok(self.current)
     }
 
+    /// Current state. Equivalent to inspecting `self` after the most
+    /// recent successful `transition`.
     #[must_use]
     pub fn current(&self) -> Status {
         self.current
     }
 
+    /// Whether the machine is pinned in a terminal state.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         is_terminal(self.current)

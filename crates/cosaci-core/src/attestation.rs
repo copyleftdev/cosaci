@@ -21,7 +21,10 @@ use crate::signing::{Keypair, Signature, VerifyingKey, verify as sig_verify};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AttestationResult {
+    /// The job ran to completion and the runner observed success.
     Pass,
+    /// The job ran but the runner observed failure (test exit code,
+    /// crash, deadline, etc.).
     Fail,
 }
 
@@ -32,14 +35,27 @@ pub enum AttestationResult {
 /// nanoseconds (signed i64 to allow pre-epoch values Hegel might draw).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attestation {
+    /// Schema version (currently `Attestation::VERSION`).
     pub version: u8,
+    /// Globally-unique 128-bit identifier for the job.
     pub job_id: [u8; 16],
+    /// Git commit SHA the job was run against.
     pub commit: [u8; 32],
+    /// Identifier of the runner that produced this attestation.
     pub runner_id: u64,
+    /// Whether the runner observed Pass or Fail.
     pub result: AttestationResult,
+    /// SHA-256 of the runner's environment manifest (image, toolchain,
+    /// env vars, …).
     pub environment_hash: [u8; 32],
+    /// SHA-256 of the deterministic output artifact (test results,
+    /// build output, …) used to detect cross-runner divergence.
     pub artifact_hash: [u8; 32],
+    /// Unix nanoseconds (signed to permit pre-epoch values Hegel might
+    /// draw during property generation).
     pub timestamp_unix_ns: i64,
+    /// Ed25519 signature over the canonicalized payload (every other
+    /// field, in declaration order). Zero-filled before signing.
     #[serde(with = "BigArray")]
     pub signature: [u8; 64],
 }

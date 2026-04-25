@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 //! `cosaci-protocol` — wire protocol + TLS transport for CosaCI.
 //!

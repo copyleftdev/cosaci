@@ -40,6 +40,8 @@ pub struct ReplayGuard<C: Clock> {
 }
 
 impl<C: Clock> ReplayGuard<C> {
+    /// Construct a replay guard with the given clock and replay-window
+    /// TTL in nanoseconds.
     #[must_use]
     pub fn new(clock: C, ttl_ns: u64) -> Self {
         Self {

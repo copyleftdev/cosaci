@@ -81,11 +81,13 @@ impl BloomFilter {
         true
     }
 
+    /// Bit-vector size in bits (parameter `m`).
     #[must_use]
     pub fn capacity_bits(&self) -> usize {
         self.m
     }
 
+    /// Number of hash functions per insert/check (parameter `k`).
     #[must_use]
     pub fn num_hashes(&self) -> usize {
         self.k

@@ -23,7 +23,9 @@
 
 use std::collections::HashMap;
 
+/// 64-bit key the shard router hashes.
 pub type Key = u64;
+/// 64-bit payload stored at a key.
 pub type Value = u64;
 
 /// Shard assignment for a key given a shard count.
@@ -72,16 +74,19 @@ impl ShardedStore {
         }
     }
 
+    /// Current shard count.
     #[must_use]
     pub fn n_shards(&self) -> usize {
         self.shards.len()
     }
 
+    /// Total number of distinct keys held across all shards.
     #[must_use]
     pub fn len(&self) -> usize {
         self.shards.iter().map(|s| s.entries.len()).sum()
     }
 
+    /// Whether the store holds zero keys.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -107,6 +112,7 @@ impl ShardedStore {
         self.shards[idx].entries.remove(&key)
     }
 
+    /// Whether the store currently holds an entry for `key`.
     #[must_use]
     pub fn contains_key(&self, key: Key) -> bool {
         self.get(key).is_some()

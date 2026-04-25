@@ -29,9 +29,13 @@ pub fn hash_bytes(data: &[u8]) -> Hash {
 /// Inclusion proof bundle.
 #[derive(Clone, Debug)]
 pub struct InclusionProof {
+    /// 0-indexed position of the entry in the log.
     pub position: u64,
+    /// The leaf (entry) hash that this proof attests to.
     pub entry: Hash,
+    /// Sibling hashes along the path from leaf to root.
     pub proof_hashes: Vec<Hash>,
+    /// Total entry count at the time the proof was issued.
     pub length_at_proof: u64,
 }
 
@@ -45,6 +49,7 @@ pub struct MerkleLog {
 }
 
 impl MerkleLog {
+    /// Construct an empty log.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -57,11 +62,13 @@ impl MerkleLog {
         pos
     }
 
+    /// Total number of entries appended.
     #[must_use]
     pub fn len(&self) -> u64 {
         self.entries.len() as u64
     }
 
+    /// Whether the log holds zero entries.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()

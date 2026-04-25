@@ -33,12 +33,19 @@ pub enum Envelope {
     /// coordinator verifies the proof on receipt; agents that can't
     /// produce a valid proof for the claimed VRF pubkey are rejected.
     Register {
+        /// Runner identifier the agent is announcing itself as.
         runner_id: u64,
+        /// Ed25519 verifying key the runner will sign attestations with.
         signing_pubkey: [u8; 32],
+        /// Schnorrkel sr25519 VRF public key.
         vrf_pubkey: [u8; 32],
+        /// VRF output for [`VRF_REGISTRATION_CHALLENGE`].
         vrf_output: [u8; 32],
+        /// Proof that `vrf_output` was produced by the holder of
+        /// `vrf_pubkey`'s secret key.
         #[serde(with = "BigArray")]
         vrf_proof: [u8; 64],
+        /// Stake the runner is committing.
         stake: u64,
     },
     /// Agent's VRF evaluation of the per-job seed. Sent in response to
@@ -46,8 +53,13 @@ pub enum Envelope {
     /// whole fleet, verifies each proof, and picks the committee as the
     /// top-k by lexicographically smallest `vrf_output`.
     VrfClaim {
+        /// Job the claim is for. Must match the most recent
+        /// [`Envelope::JobSeed`] sent to this agent.
         job_id: u64,
+        /// VRF output for the job seed.
         vrf_output: [u8; 32],
+        /// Proof that `vrf_output` was produced by the registered
+        /// VRF public key over the job seed.
         #[serde(with = "BigArray")]
         vrf_proof: [u8; 64],
     },
@@ -60,7 +72,12 @@ pub enum Envelope {
     /// Coordinator broadcasts a per-job seed to every registered agent.
     /// Each agent must respond with a [`Envelope::VrfClaim`] computed
     /// against this seed before committee selection runs.
-    JobSeed { job_id: u64, seed: [u8; 32] },
+    JobSeed {
+        /// Job identifier this seed corresponds to.
+        job_id: u64,
+        /// Per-job seed bytes; agent runs VRF over this.
+        seed: [u8; 32],
+    },
     /// Coordinator assigns a job to a committee member (only sent to
     /// agents whose VRF claim won a slot).
     ///
@@ -69,9 +86,14 @@ pub enum Envelope {
     /// the CBOR-encoded `(i32, i32)` tuple that `cosaci_wasm::execute`
     /// decodes to invoke the export.
     Assign {
+        /// Job identifier the agent should attest under.
         job_id: u64,
+        /// Binary `.wasm` module bytes the agent should compile + run.
         module: Vec<u8>,
+        /// CBOR-encoded argument tuple for the module's export.
         args_cbor: Vec<u8>,
+        /// Wall-clock deadline (unix ns) by which the attestation must
+        /// be returned.
         deadline_unix_ns: i64,
     },
     /// Coordinator tells this agent no further work is coming.
