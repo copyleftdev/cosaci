@@ -1,0 +1,104 @@
+# cargo-deny policy for CosaCI — closes issue #10.
+#
+# Four checks: advisories, licenses, bans, sources.
+# CI runs `cargo deny check`; this is a hard gate.
+
+# ─── Graph ──────────────────────────────────────────────────────────────
+# We don't pin a target list — the workspace is target-agnostic at the
+# Rust level; deny inspects every dep regardless. `all-features = false`
+# matches how the workspace builds in CI.
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# ─── Advisories ─────────────────────────────────────────────────────────
+# Default to deny; ignore only specific RUSTSEC IDs with a documented
+# reason. Yanked crates fail the check. Notice-level advisories are
+# still surfaced.
+[advisories]
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+
+ignore = [
+    # paste 1.0.15 — RUSTSEC-2024-0436 unmaintained.
+    # Pulled in transitively via hegeltest 0.8 → arbitrary → derive
+    # macro chain. No safe upgrade is available; the upstream
+    # alternative `pastey` would require either hegeltest or its deps
+    # to migrate. Re-evaluate when hegeltest cuts a release that drops
+    # paste, or when we replace hegeltest entirely.
+    "RUSTSEC-2024-0436",
+
+    # rustls-pemfile 2.2 — RUSTSEC-2025-0134 unmaintained.
+    # Used by cosaci-protocol's `read_cert_chain` / `read_private_key`
+    # / `read_crls` helpers. The migration path is documented in the
+    # advisory: switch to `rustls_pki_types::PemObject`. Tracked as a
+    # follow-up; behavior is identical for now (rustls-pemfile 2.x is
+    # a thin wrapper around the same code).
+    "RUSTSEC-2025-0134",
+]
+
+# ─── Licenses ───────────────────────────────────────────────────────────
+# Allow-list only. Anything outside this list fails the check; new deps
+# pulling unfamiliar licenses force a deliberate review.
+[licenses]
+allow = [
+    # Permissive, no copyleft, GPL-compatible (in either direction).
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    # Unicode data licenses (icu_*, unicode-ident, etc.).
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # 0BSD is functionally public domain. Used by some Bytes
+    # ecosystem crates. Equivalent in effect to MIT for our purposes.
+    "0BSD",
+    # CDLA-Permissive-2.0 (community data license, permissive variant)
+    # is used by webpki-roots.
+    "CDLA-Permissive-2.0",
+    # MPL-2.0 file-level copyleft is acceptable for library deps —
+    # we don't modify these crates.
+    "MPL-2.0",
+]
+# Crates without a SPDX license expression fail unless explicitly
+# whitelisted here. This is mostly to catch genuinely-unlicensed crates;
+# a few legitimate crates use a non-SPDX expression and need an entry.
+exceptions = []
+
+# Ignore confidence-threshold heuristics — we want exact matches. This
+# is the default but stating it explicitly.
+confidence-threshold = 0.93
+
+# ─── Bans ───────────────────────────────────────────────────────────────
+# Duplicate-version policy: warn, don't fail. The dep graph has a
+# handful of `digest 0.10` vs `0.11` and `sha2 0.10` vs `0.11`
+# multi-version entries that come from transitive deps with different
+# minimum-version requirements. Forcing a unification would mean
+# downgrading half the crypto stack — not worth it.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace path-deps don't carry a version requirement and would
+# otherwise trip the wildcard rule. They're internal (not published to
+# crates.io) so the wildcard concern doesn't apply.
+allow-wildcard-paths = true
+highlight = "all"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# ─── Sources ────────────────────────────────────────────────────────────
+# crates.io only. Any git dep or alternate registry triggers deny.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

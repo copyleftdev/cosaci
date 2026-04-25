@@ -93,13 +93,13 @@ jobs:
           grep -q "draining (signal received)" <<<"$OUT"
           grep -q "Both rounds completed cleanly" <<<"$OUT"
 
-  # Audit gate. Currently advisory — issue #10 lands deny.toml; flip
-  # `continue-on-error` to false at that point.
+  # Audit gate (issue #10): hard fail on advisories / unapproved
+  # licenses / unknown sources / wildcards. Policy lives in deny.toml
+  # at the repo root.
   deny:
     name: cargo deny check
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
 
     steps:
       - name: Checkout
