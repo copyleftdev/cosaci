@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-agent"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-coordinator"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "chacha20poly1305",
  "ciborium",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-demo"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-protocol"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
@@ -408,14 +408,14 @@ dependencies = [
 
 [[package]]
 name = "cosaci-state"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "cosaci-core",
 ]
 
 [[package]]
 name = "cosaci-vrf"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "merlin",
  "schnorrkel",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-wasm"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "sha2 0.11.0",

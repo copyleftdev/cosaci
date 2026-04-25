@@ -10,9 +10,16 @@ bumps. v1.0 onward, each crate versions independently.
 
 ## [Unreleased]
 
-In-progress v0.2.0 work, accumulating since the v0.1.0 tag. Each
-section below corresponds to a merged PR; the version isn't tagged
-until the v0.2 milestone closes (see `docs/ROADMAP.md`).
+Nothing yet. v0.3 milestone scoping is in `docs/ROADMAP.md`.
+
+## [0.2.0] — 2026-04-24
+
+The workspace + hardening release. v0.1's monolithic crate is now a
+5-library + 3-binary workspace; the coordinator runs a persistent job
+loop; agents prove ownership of their VRF keys at registration and
+re-prove on every job; modules ship as binary `.wasm` over the wire;
+mTLS supports CRLs and SIGHUP-driven cert rotation; every public item
+is doc-checked and clippy-pedantic-clean; cargo deny is a hard CI gate.
 
 ### Added — workspace + crate boundaries (#1, #2, #3, #4)
 
@@ -212,5 +219,6 @@ primitives + a working mTLS-secured coordinator/agent demo.
 - mTLS does not yet support cert rotation or CRL/OCSP revocation.
   v0.2 issue #8.
 
-[Unreleased]: https://github.com/copyleftdev/cosaci/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/copyleftdev/cosaci/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/copyleftdev/cosaci/releases/tag/v0.2.0
 [0.1.0]: https://github.com/copyleftdev/cosaci/releases/tag/v0.1.0
