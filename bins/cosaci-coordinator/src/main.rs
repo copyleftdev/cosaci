@@ -1,7 +1,9 @@
 //! CosaCI coordinator — accepts agent registrations over mTLS, then runs
-//! a persistent job loop: VRF-style assignment + quorum aggregation +
-//! Merkle anchoring per job. Reuses agent connections across jobs and
-//! drains gracefully on SIGINT/SIGTERM.
+//! a persistent job loop with **VRF-proof committee selection**: per
+//! job, every fleet member submits a VRF output + proof on the job
+//! seed; the coordinator verifies all proofs and picks the top-k by
+//! lexicographically smallest output. Reuses agent connections across
+//! jobs and drains gracefully on SIGINT/SIGTERM.
 //!
 //! Run with `cargo run --bin coordinator -- --addr 127.0.0.1:7878
 //!                                          --ca /path/ca.pem
@@ -23,8 +25,9 @@ use cosaci_core::attestation::AttestationResult;
 use cosaci_core::merkle_log::MerkleLog;
 use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::signing::VerifyingKey;
-use cosaci_protocol::proto::{Envelope, read_envelope, write_envelope};
+use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths};
+use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
 type ServerStream = StreamOwned<ServerConnection, TcpStream>;
@@ -56,8 +59,6 @@ fn main() -> std::io::Result<()> {
         .expect("max-jobs u64");
 
     // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
-    // Once flipped: finish the in-flight job, decline new ones, send
-    // Shutdown to all agents, exit.
     let draining = Arc::new(AtomicBool::new(false));
     install_signal_handlers(draining.clone())?;
 
@@ -68,22 +69,19 @@ fn main() -> std::io::Result<()> {
     println!("[coordinator] listening on {addr} (mTLS)");
     let listener = TcpListener::bind(&addr)?;
 
-    // ── Phase 1: accept `fleet` mTLS connections + Register envelopes ──────
-    // Connections established here are reused for every subsequent job.
+    // ── Phase 1: accept fleet + verify registration VRF proofs ─────────────
     let mut agents = accept_fleet(&listener, &server_cfg, fleet)?;
     let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
-    println!("[coordinator] fleet assembled ({} agents)", agents.len());
+    println!(
+        "[coordinator] fleet assembled ({} agents, all VRF-attested)",
+        agents.len()
+    );
 
-    // Pre-compile both canned modules. Production coordinators will pull
-    // modules from a job submission API; for the demo we alternate
-    // between add and mul each job to exercise the module-hash binding.
+    // Pre-compile both canned modules and alternate per job.
     let add_wasm = canned_add_module().expect("canned add module");
     let mul_wasm = canned_mul_module().expect("canned mul module");
 
     // ── Phase 2: persistent job loop ───────────────────────────────────────
-    // Each iteration is one (assign → collect → aggregate → anchor) cycle.
-    // Per-job state lives entirely inside the loop body; no leaks across
-    // jobs. The Merkle log is the only piece of state that accrues.
     let mut log = MerkleLog::new();
     let mut completed: u64 = 0;
 
@@ -109,8 +107,6 @@ fn main() -> std::io::Result<()> {
             }
             Err(e) => {
                 eprintln!("[coordinator] job {job_id} aborted: {e}");
-                // A per-job failure shouldn't poison the whole loop; the
-                // committee may have a transient issue. Move on.
                 completed += 1;
             }
         }
@@ -122,7 +118,6 @@ fn main() -> std::io::Result<()> {
         println!("[coordinator] reached max-jobs={max_jobs}, shutting down agents");
     }
 
-    // ── Phase 3: graceful agent shutdown ───────────────────────────────────
     for a in agents.iter_mut() {
         let _ = write_envelope(&mut a.stream, &Envelope::Shutdown);
         let _ = a.stream.sock.shutdown(std::net::Shutdown::Both);
@@ -164,16 +159,31 @@ fn accept_fleet(
             runner_id,
             signing_pubkey,
             vrf_pubkey,
+            vrf_output,
+            vrf_proof,
             stake,
         } = env
         else {
             eprintln!("[coordinator] dropping non-Register from {peer}");
             continue;
         };
+
+        // Verify the registration VRF proof — agent must own the secret
+        // key for the claimed VRF pubkey.
+        if let Err(e) = vrf_verify(
+            &vrf_pubkey,
+            VRF_REGISTRATION_CHALLENGE,
+            &vrf_output,
+            &vrf_proof,
+        ) {
+            eprintln!("[coordinator] dropping {peer}: registration VRF proof rejected ({e:?})");
+            continue;
+        }
+
         let signing_pk = match VerifyingKey::from_bytes(&signing_pubkey) {
             Ok(pk) => pk,
             Err(e) => {
-                eprintln!("[coordinator] bad pubkey from {peer}: {e}");
+                eprintln!("[coordinator] bad signing pubkey from {peer}: {e}");
                 continue;
             }
         };
@@ -182,7 +192,7 @@ fn accept_fleet(
             continue;
         }
         println!(
-            "[coordinator] registered runner {} from {} (stake {}, mTLS ✓)",
+            "[coordinator] registered runner {} from {} (stake {}, mTLS ✓, VRF ✓)",
             runner_id, peer, stake
         );
         agents.push(RegisteredAgent {
@@ -206,15 +216,70 @@ fn run_one_job(
     log: &mut MerkleLog,
 ) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
-    let committee = select_committee_by_pubkey_hash(agents, &job_seed, committee_size);
     let mh = cosaci_wasm::wasm_runtime::module_hash(module);
+
+    // ── Phase 2a: VRF round — ask every agent for VRF(job_seed) ────────
+    // The committee is chosen by the actual VRF outputs, not by hashing
+    // the public keys. Coord verifies every proof before counting.
+    for ag in agents.iter_mut() {
+        write_envelope(
+            &mut ag.stream,
+            &Envelope::JobSeed {
+                job_id,
+                seed: job_seed,
+            },
+        )?;
+    }
+
+    // Collect every fleet member's VrfClaim, in the order we sent
+    // JobSeed (each connection is a synchronous request/response).
+    let mut claims: Vec<(RunnerId, [u8; 32])> = Vec::with_capacity(agents.len());
+    for ag in agents.iter_mut() {
+        let env = read_envelope(&mut ag.stream)?;
+        let Envelope::VrfClaim {
+            job_id: claim_job_id,
+            vrf_output,
+            vrf_proof,
+        } = env
+        else {
+            eprintln!(
+                "[coordinator] runner {} returned {:?}, expected VrfClaim",
+                ag.runner_id, env
+            );
+            continue;
+        };
+        if claim_job_id != job_id {
+            eprintln!(
+                "[coordinator] runner {} VrfClaim job_id mismatch ({} != {})",
+                ag.runner_id, claim_job_id, job_id
+            );
+            continue;
+        }
+        if let Err(e) = vrf_verify(&ag.vrf_pk, &job_seed, &vrf_output, &vrf_proof) {
+            eprintln!(
+                "[coordinator] runner {} VrfClaim proof rejected ({:?}); excluding from selection",
+                ag.runner_id, e
+            );
+            continue;
+        }
+        claims.push((ag.runner_id, vrf_output));
+    }
+
+    // ── Phase 2b: select committee = top-k by lex-min of VRF output ────
+    let mut sorted = claims.clone();
+    sorted.sort_by(|a, b| a.1.cmp(&b.1));
+    let committee: Vec<RunnerId> = sorted
+        .iter()
+        .take(committee_size)
+        .map(|(id, _)| *id)
+        .collect();
     println!(
         "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes)",
         &mh[..4],
         module.len()
     );
 
-    // ── Broadcast Assign ───────────────────────────────────────────────
+    // ── Phase 2c: broadcast Assign to committee ────────────────────────
     let deadline = now_unix_ns() + 60_000_000_000;
     for ag in agents.iter_mut() {
         if committee.contains(&ag.runner_id) {
@@ -230,7 +295,7 @@ fn run_one_job(
         }
     }
 
-    // ── Collect SubmitAttestation ──────────────────────────────────────
+    // ── Phase 2d: collect SubmitAttestation ────────────────────────────
     let mut attestations = Vec::with_capacity(committee.len());
     for ag in agents.iter_mut() {
         if !committee.contains(&ag.runner_id) {
@@ -257,7 +322,7 @@ fn run_one_job(
         }
     }
 
-    // ── Aggregate ──────────────────────────────────────────────────────
+    // ── Phase 2e: aggregate ────────────────────────────────────────────
     let mut artifact_counts: HashMap<[u8; 32], u32> = HashMap::new();
     let votes: Vec<Vote> = attestations
         .iter()
@@ -338,24 +403,4 @@ fn now_unix_ns() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
-}
-
-fn select_committee_by_pubkey_hash(
-    agents: &[RegisteredAgent],
-    seed: &[u8; 32],
-    k: usize,
-) -> Vec<RunnerId> {
-    use sha2::{Digest, Sha256};
-    let mut scored: Vec<(RunnerId, [u8; 32])> = agents
-        .iter()
-        .map(|ag| {
-            let mut h = Sha256::new();
-            h.update(ag.vrf_pk);
-            h.update(seed);
-            let digest: [u8; 32] = h.finalize().into();
-            (ag.runner_id, digest)
-        })
-        .collect();
-    scored.sort_by(|a, b| a.1.cmp(&b.1));
-    scored.into_iter().take(k).map(|(id, _)| id).collect()
 }

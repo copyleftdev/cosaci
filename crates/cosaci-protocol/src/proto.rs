@@ -12,19 +12,44 @@
 use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 use cosaci_core::attestation::Attestation;
+
+/// Fixed VRF challenge for the registration proof. Binds
+/// `(vrf_pubkey, this string)` to a unique output that only the
+/// holder of the matching secret key could have produced. Acts as a
+/// possession-of-secret-key proof at registration time.
+pub const VRF_REGISTRATION_CHALLENGE: &[u8] = b"cosaci-runner-registration-v1";
 
 /// All messages flowing between coordinator and agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Envelope {
     // ── Agent → Coordinator ────────────────────────────────────────────
     /// Agent announces itself and its capabilities.
+    ///
+    /// `vrf_output` and `vrf_proof` are the VRF evaluation of
+    /// [`VRF_REGISTRATION_CHALLENGE`] under `vrf_pubkey`. The
+    /// coordinator verifies the proof on receipt; agents that can't
+    /// produce a valid proof for the claimed VRF pubkey are rejected.
     Register {
         runner_id: u64,
         signing_pubkey: [u8; 32],
         vrf_pubkey: [u8; 32],
+        vrf_output: [u8; 32],
+        #[serde(with = "BigArray")]
+        vrf_proof: [u8; 64],
         stake: u64,
+    },
+    /// Agent's VRF evaluation of the per-job seed. Sent in response to
+    /// a [`Envelope::JobSeed`]. Coordinator collects claims from the
+    /// whole fleet, verifies each proof, and picks the committee as the
+    /// top-k by lexicographically smallest `vrf_output`.
+    VrfClaim {
+        job_id: u64,
+        vrf_output: [u8; 32],
+        #[serde(with = "BigArray")]
+        vrf_proof: [u8; 64],
     },
     /// Agent returns a signed attestation for an assigned job.
     SubmitAttestation(Attestation),
@@ -32,14 +57,17 @@ pub enum Envelope {
     // ── Coordinator → Agent ────────────────────────────────────────────
     /// Coordinator acknowledges a `Register`.
     RegisterAck,
-    /// Coordinator assigns a job to this agent.
+    /// Coordinator broadcasts a per-job seed to every registered agent.
+    /// Each agent must respond with a [`Envelope::VrfClaim`] computed
+    /// against this seed before committee selection runs.
+    JobSeed { job_id: u64, seed: [u8; 32] },
+    /// Coordinator assigns a job to a committee member (only sent to
+    /// agents whose VRF claim won a slot).
     ///
     /// `module` is binary `.wasm` bytes obeying the v0.2 ABI defined in
     /// `cosaci-wasm` (exports `add(i32, i32) -> i32`). `args_cbor` is
     /// the CBOR-encoded `(i32, i32)` tuple that `cosaci_wasm::execute`
-    /// decodes to invoke the export. This shape lets every job ship its
-    /// own arbitrary module while keeping the coordinator/agent
-    /// completely module-agnostic.
+    /// decodes to invoke the export.
     Assign {
         job_id: u64,
         module: Vec<u8>,
