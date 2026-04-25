@@ -1,18 +1,20 @@
-//! CosaCI coordinator — accepts agent registrations over mTLS, runs
-//! one job through VRF assignment + quorum aggregation + Merkle
-//! anchoring, then shuts down. v0.1 expects CA + server cert + key on
-//! disk; the demo launcher generates them at startup.
+//! CosaCI coordinator — accepts agent registrations over mTLS, then runs
+//! a persistent job loop: VRF-style assignment + quorum aggregation +
+//! Merkle anchoring per job. Reuses agent connections across jobs and
+//! drains gracefully on SIGINT/SIGTERM.
 //!
 //! Run with `cargo run --bin coordinator -- --addr 127.0.0.1:7878
 //!                                          --ca /path/ca.pem
 //!                                          --cert /path/server.pem
 //!                                          --key  /path/server.key.pem
-//!                                          --fleet 5 --committee 3`.
+//!                                          --fleet 5 --committee 3
+//!                                          --max-jobs 3`.
 
 use std::collections::HashMap;
 use std::env;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -43,11 +45,20 @@ fn main() -> std::io::Result<()> {
     let cert_path = arg_or(&args, "--cert", "server.pem");
     let key_path = arg_or(&args, "--key", "server.key.pem");
     let fleet: u64 = arg_or(&args, "--fleet", "5").parse().expect("fleet u64");
-    let committee: usize = arg_or(&args, "--committee", "3")
+    let committee_size: usize = arg_or(&args, "--committee", "3")
         .parse()
         .expect("committee usize");
     let job_a: i32 = arg_or(&args, "--a", "21").parse().expect("a i32");
     let job_b: i32 = arg_or(&args, "--b", "21").parse().expect("b i32");
+    let max_jobs: u64 = arg_or(&args, "--max-jobs", &u64::MAX.to_string())
+        .parse()
+        .expect("max-jobs u64");
+
+    // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
+    // Once flipped: finish the in-flight job, decline new ones, send
+    // Shutdown to all agents, exit.
+    let draining = Arc::new(AtomicBool::new(false));
+    install_signal_handlers(draining.clone())?;
 
     let server_cfg: Arc<ServerConfig> =
         server_config_from_paths(&ca_path, &cert_path, &key_path)
@@ -56,7 +67,66 @@ fn main() -> std::io::Result<()> {
     println!("[coordinator] listening on {addr} (mTLS)");
     let listener = TcpListener::bind(&addr)?;
 
-    // ── Accept `fleet` mTLS connections + Register envelopes ────────────
+    // ── Phase 1: accept `fleet` mTLS connections + Register envelopes ──────
+    // Connections established here are reused for every subsequent job.
+    let mut agents = accept_fleet(&listener, &server_cfg, fleet)?;
+    let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
+    println!("[coordinator] fleet assembled ({} agents)", agents.len());
+
+    // ── Phase 2: persistent job loop ───────────────────────────────────────
+    // Each iteration is one (assign → collect → aggregate → anchor) cycle.
+    // Per-job state lives entirely inside the loop body; no leaks across
+    // jobs. The Merkle log is the only piece of state that accrues.
+    let mut log = MerkleLog::new();
+    let mut completed: u64 = 0;
+
+    while completed < max_jobs && !draining.load(Ordering::Relaxed) {
+        let job_id = completed + 1;
+        match run_one_job(
+            job_id,
+            committee_size,
+            job_a,
+            job_b,
+            &mut agents,
+            &stake_map,
+            &mut log,
+        ) {
+            Ok(()) => {
+                completed += 1;
+            }
+            Err(e) => {
+                eprintln!("[coordinator] job {job_id} aborted: {e}");
+                // A per-job failure shouldn't poison the whole loop; the
+                // committee may have a transient issue. Move on.
+                completed += 1;
+            }
+        }
+    }
+
+    if draining.load(Ordering::Relaxed) {
+        println!("[coordinator] draining (signal received), shutting down agents");
+    } else {
+        println!("[coordinator] reached max-jobs={max_jobs}, shutting down agents");
+    }
+
+    // ── Phase 3: graceful agent shutdown ───────────────────────────────────
+    for a in agents.iter_mut() {
+        let _ = write_envelope(&mut a.stream, &Envelope::Shutdown);
+        let _ = a.stream.sock.shutdown(std::net::Shutdown::Both);
+    }
+    println!("[coordinator] done — completed {completed} job(s)");
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Job lifecycle
+// ────────────────────────────────────────────────────────────────────────
+
+fn accept_fleet(
+    listener: &TcpListener,
+    server_cfg: &Arc<ServerConfig>,
+    fleet: u64,
+) -> std::io::Result<Vec<RegisteredAgent>> {
     let mut agents: Vec<RegisteredAgent> = Vec::with_capacity(fleet as usize);
     while agents.len() < fleet as usize {
         let (tcp, peer) = listener.accept()?;
@@ -110,52 +180,57 @@ fn main() -> std::io::Result<()> {
             stake,
         });
     }
-    println!("[coordinator] fleet assembled ({} agents)", agents.len());
+    Ok(agents)
+}
 
-    // ── Build the stake map + select committee ──────────────────────────
-    let mut stake_map: StakeMap = HashMap::new();
-    for a in &agents {
-        stake_map.insert(a.runner_id, a.stake);
-    }
-    let job_id: u64 = 1;
+fn run_one_job(
+    job_id: u64,
+    committee_size: usize,
+    a: i32,
+    b: i32,
+    agents: &mut [RegisteredAgent],
+    stake_map: &StakeMap,
+    log: &mut MerkleLog,
+) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
-    let committee = select_committee_by_pubkey_hash(&agents, &job_seed, committee);
-    println!("[coordinator] committee: {committee:?}");
+    let committee = select_committee_by_pubkey_hash(agents, &job_seed, committee_size);
+    println!("[coordinator] job {job_id} committee: {committee:?}");
 
-    // ── Broadcast Assign to committee ───────────────────────────────────
+    // ── Broadcast Assign ───────────────────────────────────────────────
     let deadline = now_unix_ns() + 60_000_000_000;
-    for a in agents.iter_mut() {
-        if committee.contains(&a.runner_id) {
+    for ag in agents.iter_mut() {
+        if committee.contains(&ag.runner_id) {
             write_envelope(
-                &mut a.stream,
+                &mut ag.stream,
                 &Envelope::Assign {
                     job_id,
-                    a: job_a,
-                    b: job_b,
+                    a,
+                    b,
                     deadline_unix_ns: deadline,
                 },
             )?;
         }
     }
 
-    // ── Collect SubmitAttestation from committee ────────────────────────
+    // ── Collect SubmitAttestation ──────────────────────────────────────
     let mut attestations = Vec::with_capacity(committee.len());
-    for a in agents.iter_mut() {
-        if !committee.contains(&a.runner_id) {
+    for ag in agents.iter_mut() {
+        if !committee.contains(&ag.runner_id) {
             continue;
         }
-        let env = read_envelope(&mut a.stream)?;
+        let env = read_envelope(&mut ag.stream)?;
         let Envelope::SubmitAttestation(att) = env else {
             eprintln!(
                 "[coordinator] runner {} returned {:?}, expected SubmitAttestation",
-                a.runner_id, env
+                ag.runner_id, env
             );
             continue;
         };
-        let sig_ok = att.verify_signature(&a.signing_pk);
+        let sig_ok = att.verify_signature(&ag.signing_pk);
         println!(
-            "[coordinator] runner {} attestation sig={} artifact={:02x?}…",
-            a.runner_id,
+            "[coordinator] job {} runner {} attestation sig={} artifact={:02x?}…",
+            job_id,
+            ag.runner_id,
             if sig_ok { "ok" } else { "BAD" },
             &att.artifact_hash[..4]
         );
@@ -164,7 +239,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // ── Aggregate ───────────────────────────────────────────────────────
+    // ── Aggregate ──────────────────────────────────────────────────────
     let mut artifact_counts: HashMap<[u8; 32], u32> = HashMap::new();
     let votes: Vec<Vote> = attestations
         .iter()
@@ -184,35 +259,39 @@ fn main() -> std::io::Result<()> {
         .map(|id| stake_map.get(id).copied().unwrap_or(0))
         .sum();
     let threshold = (committee_stake * 2).div_ceil(3);
-    let outcome = aggregate(&votes, threshold, &stake_map);
+    let outcome = aggregate(&votes, threshold, stake_map);
     let consensus_artifact = artifact_counts
         .iter()
         .max_by_key(|&(_, c)| *c)
         .map(|(k, _)| *k)
         .unwrap_or([0_u8; 32]);
     println!(
-        "[coordinator] quorum outcome {:?} (threshold {}, committee stake {})",
-        outcome, threshold, committee_stake
+        "[coordinator] job {} outcome {:?} (threshold {}, committee stake {})",
+        job_id, outcome, threshold, committee_stake
     );
 
     if outcome == Outcome::Pass {
-        let mut log = MerkleLog::new();
         let pos = log.append(consensus_artifact);
         let root = log.root().expect("nonempty");
         println!(
-            "[coordinator] anchored at position {} root {:02x?}…",
+            "[coordinator] job {} anchored at position {} root {:02x?}…",
+            job_id,
             pos,
             &root[..8]
         );
     }
+    Ok(())
+}
 
-    // ── Shutdown ────────────────────────────────────────────────────────
-    for a in agents.iter_mut() {
-        let _ = write_envelope(&mut a.stream, &Envelope::Shutdown);
-        // Sending close_notify cleanly is best-effort for a demo.
-        let _ = a.stream.sock.shutdown(std::net::Shutdown::Both);
-    }
-    println!("[coordinator] done");
+// ────────────────────────────────────────────────────────────────────────
+// Signal handling
+// ────────────────────────────────────────────────────────────────────────
+
+fn install_signal_handlers(draining: Arc<AtomicBool>) -> std::io::Result<()> {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::flag;
+    flag::register(SIGINT, draining.clone())?;
+    flag::register(SIGTERM, draining)?;
     Ok(())
 }
 
@@ -251,12 +330,12 @@ fn select_committee_by_pubkey_hash(
     use sha2::{Digest, Sha256};
     let mut scored: Vec<(RunnerId, [u8; 32])> = agents
         .iter()
-        .map(|a| {
+        .map(|ag| {
             let mut h = Sha256::new();
-            h.update(a.vrf_pk);
+            h.update(ag.vrf_pk);
             h.update(seed);
             let digest: [u8; 32] = h.finalize().into();
-            (a.runner_id, digest)
+            (ag.runner_id, digest)
         })
         .collect();
     scored.sort_by(|a, b| a.1.cmp(&b.1));

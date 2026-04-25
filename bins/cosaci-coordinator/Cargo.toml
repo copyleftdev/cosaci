@@ -13,6 +13,7 @@ cosaci-core     = { path = "../../crates/cosaci-core" }
 cosaci-protocol = { path = "../../crates/cosaci-protocol" }
 rustls          = { workspace = true }
 sha2            = { workspace = true }
+signal-hook     = { workspace = true }
 
 # `coordinator` (not `cosaci-coordinator`) — the demo_networked subprocess
 # launcher and existing CLI examples expect this short name.

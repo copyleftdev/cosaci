@@ -79,16 +79,17 @@ jobs:
           cargo build -p cosaci-agent       --bin agent
           cargo build -p cosaci-demo        --bin demo_networked
 
-      # End-to-end smoke test: launches the networked demo, ensures it
-      # produces the expected outcome line within 30s, and exits 0.
+      # End-to-end smoke test: networked demo runs two passes (bounded +
+      # SIGTERM drain). Allow extra time for the SIGTERM round.
       - name: Run networked demo
         run: |
           set -euo pipefail
-          OUT=$(timeout 30 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
+          OUT=$(timeout 60 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
           echo "$OUT"
-          echo "$OUT" | grep -q "quorum outcome Pass"
-          echo "$OUT" | grep -q "Inclusion proof verification: ok\|anchored at position"
-          echo "$OUT" | grep -q "Coordinator exit: 0"
+          echo "$OUT" | grep -q "outcome Pass"
+          echo "$OUT" | grep -q "anchored at position"
+          echo "$OUT" | grep -q "draining (signal received)"
+          echo "$OUT" | grep -q "Both rounds completed cleanly"
 
   # Audit gate. Currently advisory — issue #10 lands deny.toml; flip
   # `continue-on-error` to false at that point.
