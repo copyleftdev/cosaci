@@ -76,6 +76,15 @@ fn main() -> std::io::Result<()> {
     let max_jobs: u64 = arg_or(&args, "--max-jobs", &u64::MAX.to_string())
         .parse()
         .expect("max-jobs u64");
+    // `--runner-timeout-secs <s>` (issue #61) is the per-runner
+    // attestation-read deadline. A runner that doesn't return a
+    // SubmitAttestation within this window is recorded as missing
+    // and the responding subset still aggregates to an outcome.
+    // Default 30s — generous enough for slow CI workloads, tight
+    // enough that wedged runners don't tank job latency forever.
+    let runner_timeout_secs: u64 = arg_or(&args, "--runner-timeout-secs", "30")
+        .parse()
+        .expect("runner-timeout-secs u64");
     // `--log <path>` selects the file-backed Merkle log (issue #33).
     // Empty (default) means in-memory: the log is reset on every start.
     // A non-empty path opens (or creates) that file as an append-only
@@ -212,6 +221,7 @@ fn main() -> std::io::Result<()> {
             &mut agents,
             &mut stake_ledger,
             slash_fraction,
+            runner_timeout_secs,
             &log,
             &records,
         ) {
@@ -353,6 +363,7 @@ fn run_one_job(
     agents: &mut [RegisteredAgent],
     stake_ledger: &mut StakeLedger,
     slash_fraction: f32,
+    runner_timeout_secs: u64,
     log: &Arc<Mutex<LogBackend>>,
     records: &Arc<Mutex<HashMap<u64, JobRecord>>>,
 ) -> std::io::Result<()> {
@@ -471,18 +482,52 @@ fn run_one_job(
         }
     }
 
-    // ── Phase 2d: collect SubmitAttestation ────────────────────────────
+    // ── Phase 2d: collect SubmitAttestation (issue #61: partial-tolerant) ──
+    // Each runner gets a per-call read deadline. A runner that
+    // doesn't respond within the deadline is recorded as missing
+    // and the loop continues; the responding subset still aggregates
+    // to a deterministic outcome, and the missing runners surface in
+    // the log for downstream reputation tracking.
     let mut attestations = Vec::with_capacity(committee.len());
+    let mut missing: Vec<RunnerId> = Vec::new();
+    let runner_timeout = std::time::Duration::from_secs(runner_timeout_secs);
     for ag in agents.iter_mut() {
         if !committee.contains(&ag.runner_id) {
             continue;
         }
-        let env = read_envelope(&mut ag.stream)?;
+        let _ = ag.stream.sock.set_read_timeout(Some(runner_timeout));
+        let read_result = read_envelope(&mut ag.stream);
+        let _ = ag.stream.sock.set_read_timeout(None);
+        let env = match read_result {
+            Ok(e) => e,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                eprintln!(
+                    "[coordinator] job {} runner {} attestation timeout after {}s — recorded as missing",
+                    job_id, ag.runner_id, runner_timeout_secs
+                );
+                missing.push(ag.runner_id);
+                continue;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[coordinator] job {} runner {} attestation read failed ({e}) — recorded as missing",
+                    job_id, ag.runner_id
+                );
+                missing.push(ag.runner_id);
+                continue;
+            }
+        };
         let Envelope::SubmitAttestation(att) = env else {
             eprintln!(
                 "[coordinator] runner {} returned {:?}, expected SubmitAttestation",
                 ag.runner_id, env
             );
+            missing.push(ag.runner_id);
             continue;
         };
         let sig_ok = att.verify_signature(&ag.signing_pk);
@@ -495,7 +540,22 @@ fn run_one_job(
         );
         if sig_ok {
             attestations.push(att);
+        } else {
+            // Bad-sig attestation is treated like a missing one for
+            // the partial-tolerance ledger: the runner produced
+            // unverifiable output and shouldn't contribute to
+            // quorum. Slashing this case is out of scope for #61.
+            missing.push(ag.runner_id);
         }
+    }
+    if !missing.is_empty() {
+        println!(
+            "[coordinator] job {} missing attestations: {:?} ({} of {} committee)",
+            job_id,
+            missing,
+            missing.len(),
+            committee.len()
+        );
     }
 
     // ── Phase 2e: aggregate ────────────────────────────────────────────
