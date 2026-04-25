@@ -16,7 +16,7 @@
 //!
 //! Two runners executing the same `Pipeline` against the same source
 //! state must produce byte-equal `PipelineResult`s. This is the
-//! property under [`hypotheses/pipeline-determinism.md`]; falsification
+//! property under `hypotheses/pipeline-determinism.md`; falsification
 //! by the property test means a step's executor is reading
 //! non-deterministic state (clock, randomness, network) without
 //! attesting it.
