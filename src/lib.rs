@@ -21,9 +21,9 @@ pub use cosaci_state::{
     aggregator, lease, partition, rate_limit, registry, replay, replicated_cluster, sharding,
     sharding_handoff,
 };
-
-// Modules still living in the meta-crate (move out in issues #3/#4).
-pub mod proto;
-pub mod tls;
-pub mod vrf;
-pub mod wasm_runtime;
+// Re-exports from cosaci-protocol (issue #3).
+pub use cosaci_protocol::{proto, tls};
+// Re-export from cosaci-vrf (issue #3).
+pub use cosaci_vrf::vrf;
+// Re-export from cosaci-wasm (issue #3).
+pub use cosaci_wasm::wasm_runtime;

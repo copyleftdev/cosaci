@@ -5,5 +5,9 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI: WASM runtime harness (stub — module arrives in #3)"
+description = "CosaCI: WebAssembly runtime harness (wasmtime, cranelift)"
 publish     = false
+
+[dependencies]
+sha2     = { workspace = true }
+wasmtime = { workspace = true }

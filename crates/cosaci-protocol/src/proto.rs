@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::attestation::Attestation;
+use cosaci_core::attestation::Attestation;
 
 /// All messages flowing between coordinator and agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]

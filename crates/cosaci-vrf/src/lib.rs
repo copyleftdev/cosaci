@@ -1,5 +1,9 @@
+#![forbid(unsafe_code)]
+
 //! `cosaci-vrf` — VRF subsystem (schnorrkel sr25519).
 //!
-//! Stub crate. Module will move here in PR 3 of the workspace split
-//! (see issue #3). Until then, the source of truth is the `cosaci`
-//! crate at the workspace root.
+//! Heavy crypto deps (`schnorrkel`, `merlin`) are isolated to this crate
+//! so consumers that don't need a VRF (e.g. `cosaci-core`-only users)
+//! don't pay their compile cost.
+
+pub mod vrf;

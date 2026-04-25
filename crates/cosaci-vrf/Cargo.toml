@@ -5,5 +5,9 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI: VRF subsystem (stub — module arrives in #3)"
+description = "CosaCI: VRF primitive (schnorrkel sr25519 + merlin transcripts)"
 publish     = false
+
+[dependencies]
+merlin     = { workspace = true }
+schnorrkel = { workspace = true }
