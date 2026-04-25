@@ -12,6 +12,28 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — capability-aware committee selection (#34)
+
+- `cosaci-core::capabilities` gains a wire-stable representation:
+  `Runtime` and `Platform` derive `Ord` + `Serialize`/`Deserialize`,
+  the `runtimes` field in `Capabilities` / `JobRequirements` switched
+  from `HashSet<Runtime>` to `BTreeSet<Runtime>` for canonical CBOR.
+- New `Candidate<Id>` type + `select_capability_aware_committee(...)`
+  pure function. Filter-then-rank: only runners whose `Capabilities`
+  satisfy `JobRequirements` participate in the VRF top-k, and
+  underprovisioned committees abort honestly (`None` return) rather
+  than silently undercutting quorum.
+- `Envelope::Register` carries `capabilities: Capabilities`;
+  `Envelope::Assign` carries `requirements: JobRequirements`.
+  Coordinator stores capabilities at registration, builds a
+  `Vec<Candidate>` from per-job VRF claims + capability records, and
+  delegates committee selection to the pure function.
+- New hypothesis card `hypotheses/capability-aware-committee.md`
+  (class A, Tier 0). Four Hegel properties: soundness (no incapable
+  runner is selected), completeness (exactly k when ≥ k match),
+  underprovisioning honesty (`None` when < k match),
+  filter-then-rank (top-k VRF among matching, not rank-then-filter).
+
 ### Added — typed pipeline DSL (#39)
 
 - New crate `cosaci-jobs` with `Pipeline`, `Step`, `Limits`,

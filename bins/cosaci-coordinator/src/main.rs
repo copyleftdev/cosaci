@@ -23,6 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use cosaci_core::attestation::AttestationResult;
+use cosaci_core::capabilities::{
+    Candidate, Capabilities, JobRequirements, Platform, Runtime, select_capability_aware_committee,
+};
 use cosaci_core::merkle_log::MerkleLog;
 use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::signing::VerifyingKey;
@@ -46,6 +49,7 @@ struct RegisteredAgent {
     signing_pk: VerifyingKey,
     vrf_pk: [u8; 32],
     stake: u64,
+    capabilities: Capabilities,
 }
 
 fn main() -> std::io::Result<()> {
@@ -102,6 +106,16 @@ fn main() -> std::io::Result<()> {
     let add_wasm = canned_add_module().expect("canned add module");
     let mul_wasm = canned_mul_module().expect("canned mul module");
 
+    // Demo job requirements: every agent the demo spawns satisfies
+    // these (Linux x86_64 + Wasm). Future job submissions (#32) will
+    // ship per-job requirements; for now the value is uniform.
+    let demo_requirements = JobRequirements {
+        cpu: 1,
+        memory_mb: 256,
+        platform: Platform::LinuxX86_64,
+        runtimes: [Runtime::Wasm].into_iter().collect(),
+    };
+
     // ── Phase 2: persistent job loop ───────────────────────────────────────
     let mut log = MerkleLog::new();
     let mut completed: u64 = 0;
@@ -125,6 +139,7 @@ fn main() -> std::io::Result<()> {
             job_id,
             committee_size,
             pipeline,
+            demo_requirements.clone(),
             module,
             &mut agents,
             &stake_map,
@@ -193,6 +208,7 @@ fn accept_fleet(
             vrf_output,
             vrf_proof,
             stake,
+            capabilities,
         } = env
         else {
             eprintln!("[coordinator] dropping non-Register from {peer}");
@@ -223,8 +239,8 @@ fn accept_fleet(
             continue;
         }
         println!(
-            "[coordinator] registered runner {} from {} (stake {}, mTLS ✓, VRF ✓)",
-            runner_id, peer, stake
+            "[coordinator] registered runner {} from {} (stake {}, mTLS ✓, VRF ✓, platform={:?}, runtimes={:?})",
+            runner_id, peer, stake, capabilities.platform, capabilities.runtimes
         );
         agents.push(RegisteredAgent {
             runner_id,
@@ -232,6 +248,7 @@ fn accept_fleet(
             signing_pk,
             vrf_pk: vrf_pubkey,
             stake,
+            capabilities,
         });
     }
     Ok(agents)
@@ -241,6 +258,7 @@ fn run_one_job(
     job_id: u64,
     committee_size: usize,
     pipeline: cosaci_jobs::Pipeline,
+    requirements: JobRequirements,
     log_module: &[u8],
     agents: &mut [RegisteredAgent],
     stake_map: &StakeMap,
@@ -300,14 +318,44 @@ fn run_one_job(
         claims.push((ag.runner_id, vrf_output));
     }
 
-    // ── Phase 2b: select committee = top-k by lex-min of VRF output ────
-    let mut sorted = claims.clone();
-    sorted.sort_by(|a, b| a.1.cmp(&b.1));
-    let committee: Vec<RunnerId> = sorted
+    // ── Phase 2b: build candidate list + filter-then-rank ──────────────
+    // Issue #34: only runners whose `Capabilities` satisfy the job's
+    // `JobRequirements` are eligible for the committee. The pure
+    // selection logic lives in `cosaci-core::capabilities`; the
+    // coordinator's job here is to assemble the candidate list from
+    // the VRF round's claims and the registry's capability records.
+    let agent_caps: HashMap<RunnerId, Capabilities> = agents
         .iter()
-        .take(committee_size)
-        .map(|(id, _)| *id)
+        .map(|a| (a.runner_id, a.capabilities.clone()))
         .collect();
+    let candidates: Vec<Candidate<RunnerId>> = claims
+        .into_iter()
+        .filter_map(|(id, vrf_output)| {
+            agent_caps.get(&id).map(|caps| Candidate {
+                id,
+                capabilities: caps.clone(),
+                vrf_output,
+            })
+        })
+        .collect();
+
+    let Some(committee) =
+        select_capability_aware_committee(&candidates, &requirements, committee_size)
+    else {
+        let eligible_count = candidates
+            .iter()
+            .filter(|c| cosaci_core::capabilities::matches(&c.capabilities, &requirements))
+            .count();
+        eprintln!(
+            "[coordinator] job {job_id} ABORTED: only {eligible_count} of {} runner(s) match requirements ({:?} / {} cpu / {} MiB / runtimes {:?}); need {committee_size}",
+            candidates.len(),
+            requirements.platform,
+            requirements.cpu,
+            requirements.memory_mb,
+            requirements.runtimes
+        );
+        return Ok(());
+    };
     println!(
         "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes), pipeline ({} step(s))",
         &mh[..4],
@@ -324,6 +372,7 @@ fn run_one_job(
                 &Envelope::Assign {
                     job_id,
                     pipeline: pipeline.clone(),
+                    requirements: requirements.clone(),
                     deadline_unix_ns: deadline,
                 },
             )?;

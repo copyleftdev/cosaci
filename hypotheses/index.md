@@ -30,6 +30,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `status-lifecycle` | §11.2 | A | **passing** | `tests/status_lifecycle.rs` | — |
 | `det-exec-verifier` | §6.1a | A | **passing** | `tests/det_exec_verifier.rs` | rs_merkle 1.5 |
 | `pipeline-determinism` | §6.2 | A | encoded | `tests/pipeline_determinism.rs` | cosaci-jobs (#39) |
+| `capability-aware-committee` | §5.2b + §7.1 | A | encoded | `tests/capability_aware_committee.rs` | capability-match + vrf (#34) |
 
 ## Tier 1 — Scale primitives (8 cards, all A)
 
