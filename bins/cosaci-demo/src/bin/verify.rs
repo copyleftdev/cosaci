@@ -8,13 +8,15 @@
 //!
 //! Run with:
 //!
-//!     cargo run --bin verify -- \
-//!         --addr 127.0.0.1:7879 \
-//!         --ca   /path/ca.pem \
-//!         --cert /path/auditor.pem \
-//!         --key  /path/auditor.key.pem \
-//!         --server-name cosaci.local \
-//!         --job-id 1
+//! ```text
+//! cargo run --bin verify -- \
+//!     --addr 127.0.0.1:7879 \
+//!     --ca   /path/ca.pem \
+//!     --cert /path/auditor.pem \
+//!     --key  /path/auditor.key.pem \
+//!     --server-name cosaci.local \
+//!     --job-id 1
+//! ```
 //!
 //! Each request opens a fresh connection — the coordinator's read
 //! server handles one envelope per accept.
