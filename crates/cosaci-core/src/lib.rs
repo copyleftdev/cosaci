@@ -18,6 +18,7 @@ pub mod gossip;
 pub mod merkle_log;
 pub mod quorum;
 pub mod reputation;
+pub mod retrieval;
 pub mod signing;
 pub mod status;
 pub mod verifier;

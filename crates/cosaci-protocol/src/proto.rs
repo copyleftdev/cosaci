@@ -16,6 +16,7 @@ use serde_big_array::BigArray;
 
 use cosaci_core::attestation::Attestation;
 use cosaci_core::capabilities::{Capabilities, JobRequirements};
+use cosaci_core::retrieval::JobBundle;
 
 /// Fixed VRF challenge for the registration proof. Binds
 /// `(vrf_pubkey, this string)` to a unique output that only the
@@ -109,6 +110,33 @@ pub enum Envelope {
     },
     /// Coordinator tells this agent no further work is coming.
     Shutdown,
+
+    // ── Read API (Auditor / dashboard → Coordinator) ───────────────────
+    /// Request the coordinator's record for a single job. The coord
+    /// responds with [`Envelope::JobBundleResponse`] (verifiable
+    /// bundle) on hit, or [`Envelope::JobNotFound`] on miss.
+    GetJob {
+        /// Job to look up.
+        job_id: u64,
+    },
+    /// Request the coordinator's current Merkle log root + length.
+    /// Coord responds with [`Envelope::LogRoot`].
+    GetLogRoot,
+    /// Coordinator's response to [`Envelope::GetJob`] on hit.
+    JobBundleResponse(JobBundle),
+    /// Coordinator's response to [`Envelope::GetJob`] on miss.
+    JobNotFound {
+        /// The job_id that was requested.
+        job_id: u64,
+    },
+    /// Coordinator's response to [`Envelope::GetLogRoot`]. `root` is
+    /// `None` for an empty log; `length` is the number of entries.
+    LogRoot {
+        /// Current Merkle root over all `length` entries, or `None`.
+        root: Option<[u8; 32]>,
+        /// Number of entries in the log.
+        length: u64,
+    },
 }
 
 /// Maximum envelope payload size (16 MiB). Sized to accept real-world

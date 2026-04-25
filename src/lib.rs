@@ -14,7 +14,7 @@
 // Re-exports from cosaci-core (issue #2).
 pub use cosaci_core::{
     attestation, bloom, capabilities, clock, confidentiality, flake, gossip, merkle_log, quorum,
-    reputation, signing, status, verifier,
+    reputation, retrieval, signing, status, verifier,
 };
 // Re-exports from cosaci-state (issue #2).
 pub use cosaci_state::{

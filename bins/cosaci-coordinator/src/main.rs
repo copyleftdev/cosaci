@@ -26,8 +26,9 @@ use cosaci_core::attestation::AttestationResult;
 use cosaci_core::capabilities::{
     Candidate, Capabilities, JobRequirements, Platform, Runtime, select_capability_aware_committee,
 };
-use cosaci_core::merkle_log::{FileStore, MerkleLog};
+use cosaci_core::merkle_log::{FileStore, MerkleLog, hash_bytes};
 use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
+use cosaci_core::retrieval::{JobRecord, build_bundle};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
@@ -78,6 +79,11 @@ fn main() -> std::io::Result<()> {
     // A non-empty path opens (or creates) that file as an append-only
     // 32-bytes-per-entry log; restart recovers prior anchors.
     let log_path = arg_or(&args, "--log", "");
+    // `--read-addr <addr>` enables the read API (issue #44). Empty
+    // means disabled (no read server thread spawned). Non-empty:
+    // bind a second TLS listener on that addr and serve `GetJob` /
+    // `GetLogRoot` requests against the live job registry + log.
+    let read_addr = arg_or(&args, "--read-addr", "");
 
     // ── Drain flag set by SIGINT/SIGTERM ───────────────────────────────────
     let draining = Arc::new(AtomicBool::new(false));
@@ -122,7 +128,7 @@ fn main() -> std::io::Result<()> {
     };
 
     // ── Phase 2: persistent job loop ───────────────────────────────────────
-    let mut log = if log_path.is_empty() {
+    let log_backend = if log_path.is_empty() {
         LogBackend::Mem(MerkleLog::new())
     } else {
         let file_log = MerkleLog::<FileStore>::open(&log_path)?;
@@ -132,6 +138,21 @@ fn main() -> std::io::Result<()> {
         );
         LogBackend::File(file_log)
     };
+    let log: Arc<Mutex<LogBackend>> = Arc::new(Mutex::new(log_backend));
+    let records: Arc<Mutex<HashMap<u64, JobRecord>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // Read API (issue #44) — only spawn the listener if --read-addr
+    // was given. Daemon thread; dies when the process exits.
+    if !read_addr.is_empty() {
+        spawn_read_server(
+            read_addr.clone(),
+            shared_cfg.clone(),
+            records.clone(),
+            log.clone(),
+        )?;
+        println!("[coordinator] read API listening on {read_addr} (mTLS)");
+    }
+
     let mut completed: u64 = 0;
 
     while completed < max_jobs && !draining.load(Ordering::Relaxed) {
@@ -157,7 +178,8 @@ fn main() -> std::io::Result<()> {
             module,
             &mut agents,
             &stake_map,
-            &mut log,
+            &log,
+            &records,
         ) {
             Ok(()) => {
                 completed += 1;
@@ -276,7 +298,8 @@ fn run_one_job(
     log_module: &[u8],
     agents: &mut [RegisteredAgent],
     stake_map: &StakeMap,
-    log: &mut LogBackend,
+    log: &Arc<Mutex<LogBackend>>,
+    records: &Arc<Mutex<HashMap<u64, JobRecord>>>,
 ) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
     // log_module is the leading WASM module bytes — used only for the
@@ -452,8 +475,34 @@ fn run_one_job(
     );
 
     if outcome == Outcome::Pass {
-        let pos = log.append(consensus_artifact)?;
-        let root = log.root().expect("nonempty");
+        // Compute pipeline_hash for the retrieval record. Canonical
+        // CBOR encoding of the typed pipeline → SHA-256.
+        let pipeline_bytes = cosaci_jobs::canonical_encoding(&pipeline)
+            .map_err(|e| std::io::Error::other(format!("canonical encoding of pipeline: {e:?}")))?;
+        let pipeline_hash = hash_bytes(&pipeline_bytes);
+
+        // Append + record under the same lock so registry / log stay
+        // mutually consistent for any concurrent retrieval.
+        let (pos, length, root) = {
+            let mut log_g = log.lock().expect("log mutex poisoned");
+            let pos = log_g.append(consensus_artifact)?;
+            let length = log_g.len();
+            let root = log_g.root().expect("nonempty");
+            (pos, length, root)
+        };
+        let record = JobRecord {
+            job_id,
+            pipeline_hash,
+            committee_attestations: attestations.clone(),
+            consensus_artifact,
+            log_position: pos,
+            log_length_at_anchor: length,
+        };
+        records
+            .lock()
+            .expect("records mutex poisoned")
+            .insert(job_id, record);
+
         println!(
             "[coordinator] job {} anchored at position {} root {:02x?}…",
             job_id,
@@ -579,5 +628,104 @@ impl LogBackend {
             Self::Mem(l) => l.root(),
             Self::File(l) => l.root(),
         }
+    }
+
+    fn len(&self) -> u64 {
+        match self {
+            Self::Mem(l) => l.len(),
+            Self::File(l) => l.len(),
+        }
+    }
+
+    fn build_bundle(
+        &self,
+        records: &HashMap<u64, JobRecord>,
+        job_id: u64,
+    ) -> Option<cosaci_core::retrieval::JobBundle> {
+        match self {
+            Self::Mem(l) => build_bundle(records, l, job_id),
+            Self::File(l) => build_bundle(records, l, job_id),
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Read API server (issue #44)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spawn the read-side TLS listener. Daemon thread; dies on process
+/// exit. Each accepted connection is handled on its own short-lived
+/// thread — read clients send one request envelope and read one
+/// response envelope, then disconnect.
+fn spawn_read_server(
+    addr: String,
+    shared_cfg: SharedServerConfig,
+    records: Arc<Mutex<HashMap<u64, JobRecord>>>,
+    log: Arc<Mutex<LogBackend>>,
+) -> std::io::Result<()> {
+    let listener = TcpListener::bind(&addr)?;
+    thread::spawn(move || {
+        loop {
+            let (tcp, peer) = match listener.accept() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[coordinator/read] accept error: {e}");
+                    continue;
+                }
+            };
+            let _ = tcp.set_nodelay(true);
+            let cfg_snapshot = shared_cfg.lock().expect("shared cfg poisoned").clone();
+            let conn = match ServerConnection::new(cfg_snapshot) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[coordinator/read] ServerConnection::new for {peer}: {e}");
+                    continue;
+                }
+            };
+            let stream = ServerStream::new(conn, tcp);
+            let records = records.clone();
+            let log = log.clone();
+            thread::spawn(move || handle_read_client(stream, peer, records, log));
+        }
+    });
+    Ok(())
+}
+
+fn handle_read_client(
+    mut stream: ServerStream,
+    peer: std::net::SocketAddr,
+    records: Arc<Mutex<HashMap<u64, JobRecord>>>,
+    log: Arc<Mutex<LogBackend>>,
+) {
+    let req = match read_envelope(&mut stream) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[coordinator/read] {peer}: read failed: {e}");
+            return;
+        }
+    };
+    let resp = match req {
+        Envelope::GetJob { job_id } => {
+            let recs = records.lock().expect("records mutex poisoned");
+            let log_g = log.lock().expect("log mutex poisoned");
+            match log_g.build_bundle(&recs, job_id) {
+                Some(b) => Envelope::JobBundleResponse(b),
+                None => Envelope::JobNotFound { job_id },
+            }
+        }
+        Envelope::GetLogRoot => {
+            let log_g = log.lock().expect("log mutex poisoned");
+            Envelope::LogRoot {
+                root: log_g.root(),
+                length: log_g.len(),
+            }
+        }
+        other => {
+            eprintln!("[coordinator/read] {peer}: dropping non-read envelope {other:?}");
+            return;
+        }
+    };
+    if let Err(e) = write_envelope(&mut stream, &resp) {
+        eprintln!("[coordinator/read] {peer}: write failed: {e}");
     }
 }
