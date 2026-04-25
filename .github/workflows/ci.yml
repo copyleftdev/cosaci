@@ -78,11 +78,12 @@ jobs:
         with:
           shared-key: "ubuntu-stable"
 
-      - name: Build coordinator + agent + demo_networked
+      - name: Build coordinator + agent + demo_networked + verify
         run: |
           cargo build -p cosaci-coordinator --bin coordinator
           cargo build -p cosaci-agent       --bin agent
           cargo build -p cosaci-demo        --bin demo_networked
+          cargo build -p cosaci-demo        --bin verify
 
       # End-to-end smoke test: networked demo runs two passes (bounded +
       # SIGTERM drain). Allow extra time for the SIGTERM round.
