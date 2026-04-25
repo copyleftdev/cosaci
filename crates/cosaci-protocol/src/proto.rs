@@ -81,17 +81,17 @@ pub enum Envelope {
     /// Coordinator assigns a job to a committee member (only sent to
     /// agents whose VRF claim won a slot).
     ///
-    /// `module` is binary `.wasm` bytes obeying the v0.2 ABI defined in
-    /// `cosaci-wasm` (exports `add(i32, i32) -> i32`). `args_cbor` is
-    /// the CBOR-encoded `(i32, i32)` tuple that `cosaci_wasm::execute`
-    /// decodes to invoke the export.
+    /// `pipeline` is a typed sequence of steps from `cosaci-jobs`
+    /// (issue #39) that the agent executes via
+    /// `cosaci_jobs::execute_pipeline`. Step types whose executors
+    /// haven't yet landed (#40 source fetch, #43 native exec, #54
+    /// egress) report `StepStatus::NotImplemented` deterministically;
+    /// the wire shape is forward-compatible with all step types.
     Assign {
         /// Job identifier the agent should attest under.
         job_id: u64,
-        /// Binary `.wasm` module bytes the agent should compile + run.
-        module: Vec<u8>,
-        /// CBOR-encoded argument tuple for the module's export.
-        args_cbor: Vec<u8>,
+        /// Typed pipeline definition.
+        pipeline: cosaci_jobs::Pipeline,
         /// Wall-clock deadline (unix ns) by which the attestation must
         /// be returned.
         deadline_unix_ns: i64,

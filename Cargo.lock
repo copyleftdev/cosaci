@@ -333,7 +333,9 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 name = "cosaci"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "cosaci-core",
+ "cosaci-jobs",
  "cosaci-protocol",
  "cosaci-state",
  "cosaci-vrf",
@@ -350,6 +352,7 @@ name = "cosaci-agent"
 version = "0.2.0"
 dependencies = [
  "cosaci-core",
+ "cosaci-jobs",
  "cosaci-protocol",
  "cosaci-vrf",
  "cosaci-wasm",
@@ -361,6 +364,7 @@ name = "cosaci-coordinator"
 version = "0.2.0"
 dependencies = [
  "cosaci-core",
+ "cosaci-jobs",
  "cosaci-protocol",
  "cosaci-vrf",
  "cosaci-wasm",
@@ -393,11 +397,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosaci-jobs"
+version = "0.2.0"
+dependencies = [
+ "ciborium",
+ "cosaci-core",
+ "cosaci-wasm",
+ "serde",
+ "serde-big-array",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "cosaci-protocol"
 version = "0.2.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
+ "cosaci-jobs",
  "rcgen",
  "rustls",
  "rustls-pemfile",

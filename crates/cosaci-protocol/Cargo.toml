@@ -13,6 +13,7 @@ publish     = false
 
 [dependencies]
 cosaci-core     = { path = "../cosaci-core" }
+cosaci-jobs     = { path = "../cosaci-jobs" }
 ciborium        = { workspace = true }
 rcgen           = { workspace = true }
 rustls          = { workspace = true }

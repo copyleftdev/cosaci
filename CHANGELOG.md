@@ -10,7 +10,31 @@ bumps. v1.0 onward, each crate versions independently.
 
 ## [Unreleased]
 
-Nothing yet. v0.3 milestone scoping is in `docs/ROADMAP.md`.
+In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
+
+### Added — typed pipeline DSL (#39)
+
+- New crate `cosaci-jobs` with `Pipeline`, `Step`, `Limits`,
+  `StepOutput`, `PipelineResult`, `PipelineError` types. CBOR-encoded
+  on the wire; `execute_pipeline(&Pipeline) -> PipelineResult`
+  delegates per-step execution to the per-kind executor.
+- `Envelope::Assign` now carries `pipeline: Pipeline` instead of
+  `(module, args_cbor)`. **Wire-protocol break vs v0.2** — clean
+  break, no compat shim (the cosaci crates are `publish = false`).
+- New hypothesis card `hypotheses/pipeline-determinism.md` (class A,
+  Tier 0). Five Hegel properties: CBOR round-trip stability,
+  repeated-execution stability, output-changing mutation propagation,
+  `NotImplemented`-step determinism, empty-pipeline determinism.
+- 4th real Hegel shrink resolved during development: the initial
+  spec claim "any input mutation changes the artifact hash" was
+  falsified by `mul(0, 0) == mul(1, 0) == 0`. The corrected claim
+  bounds the property to mutations the executor isn't lossy on; the
+  shrink is captured in the card's "Hegel shrink" section.
+
+Step executors implemented today: `ExecWasm` (delegates to
+`cosaci-wasm`). `SourceFetch`, `ExecNative`, `CaptureLog`, and
+`CaptureArtifact` types are defined and CBOR-roundtrip; their
+executors land in #40, #43, #54.
 
 ## [0.2.0] — 2026-04-24
 

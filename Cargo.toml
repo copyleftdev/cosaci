@@ -12,6 +12,7 @@ members = [
     "crates/cosaci-protocol",
     "crates/cosaci-vrf",
     "crates/cosaci-wasm",
+    "crates/cosaci-jobs",
     "bins/cosaci-coordinator",
     "bins/cosaci-agent",
     "bins/cosaci-demo",
@@ -132,8 +133,10 @@ cosaci-state    = { path = "crates/cosaci-state" }
 cosaci-protocol = { path = "crates/cosaci-protocol" }
 cosaci-vrf      = { path = "crates/cosaci-vrf" }
 cosaci-wasm     = { path = "crates/cosaci-wasm" }
+cosaci-jobs     = { path = "crates/cosaci-jobs" }
 
 [dev-dependencies]
+ciborium    = { workspace = true }
 criterion   = { workspace = true }
 hegeltest   = { workspace = true }
 rand        = { workspace = true }
