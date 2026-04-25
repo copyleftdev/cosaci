@@ -85,11 +85,13 @@ jobs:
         run: |
           set -euo pipefail
           OUT=$(timeout 60 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
-          echo "$OUT"
-          echo "$OUT" | grep -q "outcome Pass"
-          echo "$OUT" | grep -q "anchored at position"
-          echo "$OUT" | grep -q "draining (signal received)"
-          echo "$OUT" | grep -q "Both rounds completed cleanly"
+          printf '%s\n' "$OUT"
+          # Here-strings — avoids the SIGPIPE-on-`echo|grep -q` race that
+          # `set -e` + `pipefail` treats as fatal in GitHub Actions.
+          grep -q "outcome Pass"             <<<"$OUT"
+          grep -q "anchored at position"     <<<"$OUT"
+          grep -q "draining (signal received)" <<<"$OUT"
+          grep -q "Both rounds completed cleanly" <<<"$OUT"
 
   # Audit gate. Currently advisory — issue #10 lands deny.toml; flip
   # `continue-on-error` to false at that point.

@@ -362,6 +362,7 @@ version = "0.2.0-alpha.1"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
+ "cosaci-wasm",
  "rustls",
  "sha2 0.11.0",
  "signal-hook",
@@ -422,8 +423,10 @@ dependencies = [
 name = "cosaci-wasm"
 version = "0.2.0-alpha.1"
 dependencies = [
+ "ciborium",
  "sha2 0.11.0",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]

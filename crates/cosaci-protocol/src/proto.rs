@@ -33,19 +33,27 @@ pub enum Envelope {
     /// Coordinator acknowledges a `Register`.
     RegisterAck,
     /// Coordinator assigns a job to this agent.
+    ///
+    /// `module` is binary `.wasm` bytes obeying the v0.2 ABI defined in
+    /// `cosaci-wasm` (exports `add(i32, i32) -> i32`). `args_cbor` is
+    /// the CBOR-encoded `(i32, i32)` tuple that `cosaci_wasm::execute`
+    /// decodes to invoke the export. This shape lets every job ship its
+    /// own arbitrary module while keeping the coordinator/agent
+    /// completely module-agnostic.
     Assign {
         job_id: u64,
-        a: i32,
-        b: i32,
+        module: Vec<u8>,
+        args_cbor: Vec<u8>,
         deadline_unix_ns: i64,
     },
     /// Coordinator tells this agent no further work is coming.
     Shutdown,
 }
 
-/// Maximum envelope payload size (1 MiB). Prevents a malformed length
-/// prefix from causing a 4 GiB allocation.
-const MAX_ENVELOPE_BYTES: usize = 1 << 20;
+/// Maximum envelope payload size (16 MiB). Sized to accept real-world
+/// WASM modules (issue #6) while still bounding the damage a malformed
+/// length prefix can do (vs. a 4 GiB allocation if unbounded).
+const MAX_ENVELOPE_BYTES: usize = 16 << 20;
 
 /// Write an `Envelope` as `[4 byte BE length][CBOR bytes]`.
 ///

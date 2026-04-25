@@ -18,7 +18,9 @@ use cosaci_core::signing::{Keypair, VerifyingKey};
 use cosaci_state::lease::LeaseManager;
 use cosaci_state::registry::{Registry, RunnerInfo};
 use cosaci_vrf::vrf::VrfKeypair;
-use cosaci_wasm::wasm_runtime::{execute_add, output_hash};
+use cosaci_wasm::wasm_runtime::{
+    canned_add_module, encode_args, execute, module_hash, output_hash,
+};
 
 /// One runner's in-process state.
 struct Agent {
@@ -144,11 +146,16 @@ fn main() {
     }
 
     // ─── 6. Assigned runners execute WASM and sign attestations ──────────
+    // Coordinator ships the canned add module; agents execute it and bind
+    // the output hash to the module hash so different modules can't collide.
+    let job_module = canned_add_module().expect("canned add module");
+    let job_module_hash = module_hash(&job_module);
+    let job_args = encode_args(job_input.0, job_input.1).expect("encode args");
     let mut attestations: Vec<Attestation> = Vec::new();
     for &runner_id in &assigned {
         let agent = &agents[runner_id as usize];
-        let result = execute_add(job_input.0, job_input.1).expect("wasm execution");
-        let artifact = output_hash(result);
+        let result = execute(&job_module, &job_args).expect("wasm execution");
+        let artifact = output_hash(&job_module_hash, result);
         let mut att = Attestation {
             version: Attestation::VERSION,
             job_id: u64_to_uuid(job_id),

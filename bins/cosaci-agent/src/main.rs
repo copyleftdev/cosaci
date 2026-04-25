@@ -22,7 +22,7 @@ use cosaci_core::signing::Keypair;
 use cosaci_protocol::proto::{Envelope, read_envelope, write_envelope};
 use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_vrf::vrf::VrfKeypair;
-use cosaci_wasm::wasm_runtime::{execute_add, output_hash};
+use cosaci_wasm::wasm_runtime::{execute, module_hash, output_hash};
 
 type ClientStream = StreamOwned<ClientConnection, TcpStream>;
 
@@ -94,14 +94,19 @@ fn main() -> std::io::Result<()> {
         match env {
             Envelope::Assign {
                 job_id,
-                a,
-                b,
+                module,
+                args_cbor,
                 deadline_unix_ns,
             } => {
-                println!("[agent {id}] assigned job {job_id}: add({a}, {b})");
-                let result =
-                    execute_add(a, b).map_err(|e| std::io::Error::other(format!("wasm: {e}")))?;
-                let artifact = output_hash(result);
+                let mh = module_hash(&module);
+                println!(
+                    "[agent {id}] assigned job {job_id}: module={:02x?}… ({} bytes)",
+                    &mh[..4],
+                    module.len()
+                );
+                let result = execute(&module, &args_cbor)
+                    .map_err(|e| std::io::Error::other(format!("wasm: {e}")))?;
+                let artifact = output_hash(&mh, result);
                 let mut att = Attestation {
                     version: Attestation::VERSION,
                     job_id: u64_to_uuid(job_id),
