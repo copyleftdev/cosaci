@@ -105,9 +105,10 @@ signal-hook      = "0.3.18"
 time             = { version = "0.3", default-features = false, features = ["std"] }
 
 # ─── Root package: cosaci v0.1.0 ────────────────────────────────────────
-# Stays as the source of truth until issues #2/#3/#4 redistribute the
-# modules into the workspace members above. Tests, binaries, and
-# benches all live here for now.
+# A thin re-export shim now that issues #2/#3/#4 redistributed the
+# modules across cosaci-{core,state,protocol,vrf,wasm}. The meta-crate
+# stays so the 32 integration tests under `tests/` and the criterion
+# benches under `benches/` can keep using `cosaci::*` paths.
 
 [package]
 name        = "cosaci"
@@ -115,7 +116,10 @@ version     = "0.1.0"
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/copyleftdev/cosaci"
-description = "Distributed attested CI mesh — property-tested at every layer (v0.1)"
+description = "CosaCI: meta-crate that re-exports cosaci-{core,state,protocol,vrf,wasm} for tests + benches"
+readme      = "README.md"
+keywords    = ["distributed", "ci", "consensus", "wasm", "mtls"]
+categories  = ["network-programming", "cryptography"]
 publish     = false
 
 [dependencies]

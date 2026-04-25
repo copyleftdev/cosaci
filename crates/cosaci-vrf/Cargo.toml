@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI: VRF primitive (schnorrkel sr25519 + merlin transcripts)"
+readme      = "../../README.md"
+keywords    = ["vrf", "schnorrkel", "sr25519", "merlin", "cryptography"]
+categories  = ["cryptography"]
 publish     = false
 
 [dependencies]

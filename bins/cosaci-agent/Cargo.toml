@@ -6,6 +6,9 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 description = "CosaCI agent binary — registers with coordinator over mTLS, executes WASM jobs, returns signed attestations"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "agent", "wasm", "attestation"]
+categories  = ["command-line-utilities", "network-programming"]
 publish     = false
 
 [dependencies]
