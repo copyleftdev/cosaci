@@ -10,15 +10,15 @@
 
 use std::collections::HashMap;
 
-use cosaci::attestation::{Attestation, AttestationResult};
-use cosaci::clock::{Clock, SystemClock};
-use cosaci::lease::LeaseManager;
-use cosaci::merkle_log::MerkleLog;
-use cosaci::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
-use cosaci::registry::{Registry, RunnerInfo};
-use cosaci::signing::{Keypair, VerifyingKey};
-use cosaci::vrf::VrfKeypair;
-use cosaci::wasm_runtime::{execute_add, output_hash};
+use cosaci_core::attestation::{Attestation, AttestationResult};
+use cosaci_core::clock::{Clock, SystemClock};
+use cosaci_core::merkle_log::MerkleLog;
+use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight, aggregate};
+use cosaci_core::signing::{Keypair, VerifyingKey};
+use cosaci_state::lease::LeaseManager;
+use cosaci_state::registry::{Registry, RunnerInfo};
+use cosaci_vrf::vrf::VrfKeypair;
+use cosaci_wasm::wasm_runtime::{execute_add, output_hash};
 
 /// One runner's in-process state.
 struct Agent {
@@ -234,7 +234,7 @@ fn main() {
 
         // Verify the inclusion proof of our freshly-appended entry.
         let proof = coord.log.inclusion_proof(position).expect("member");
-        let verified = cosaci::merkle_log::verify_inclusion(&proof, root);
+        let verified = cosaci_core::merkle_log::verify_inclusion(&proof, root);
         println!(
             "▸ Inclusion proof verification: {}",
             if verified { "ok" } else { "BAD" }

@@ -5,5 +5,12 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
-description = "CosaCI single-process and networked demo runners (stub — code arrives in #4)"
+description = "CosaCI single-process and networked demo runners — the smoke test for the full mesh"
 publish     = false
+
+[dependencies]
+cosaci-core     = { path = "../../crates/cosaci-core" }
+cosaci-state    = { path = "../../crates/cosaci-state" }
+cosaci-protocol = { path = "../../crates/cosaci-protocol" }
+cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
+cosaci-wasm     = { path = "../../crates/cosaci-wasm" }

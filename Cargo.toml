@@ -58,23 +58,22 @@ description = "Distributed attested CI mesh — property-tested at every layer (
 publish     = false
 
 [dependencies]
-# Workspace member crates the meta-crate re-exports (issues #2/#3).
+# After #4, the meta-crate is a thin re-export shim. It exists so the 32
+# integration tests under `tests/` and the criterion benches under
+# `benches/` can keep using `cosaci::*` paths. New code outside this
+# repo should depend on the per-crate paths directly (e.g. `cosaci_core`).
 cosaci-core     = { path = "crates/cosaci-core" }
 cosaci-state    = { path = "crates/cosaci-state" }
 cosaci-protocol = { path = "crates/cosaci-protocol" }
 cosaci-vrf      = { path = "crates/cosaci-vrf" }
 cosaci-wasm     = { path = "crates/cosaci-wasm" }
 
-# Direct deps for the four binaries that still live in src/bin/. Bins
-# move out in issue #4; at that point this list collapses entirely.
-rustls = { workspace = true }
-sha2   = { workspace = true }
-
 [dev-dependencies]
 criterion   = { workspace = true }
 hegeltest   = { workspace = true }
 rand        = { workspace = true }
 rand_chacha = { workspace = true }
+sha2        = { workspace = true }
 
 [[bench]]
 name    = "hot_paths"
