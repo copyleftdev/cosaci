@@ -25,6 +25,7 @@ use cosaci_core::quorum::{Outcome, RunnerId, StakeMap, Vote, VoteResult, Weight,
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{Envelope, read_envelope, write_envelope};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths};
+use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
 type ServerStream = StreamOwned<ServerConnection, TcpStream>;
 
@@ -73,6 +74,12 @@ fn main() -> std::io::Result<()> {
     let stake_map: StakeMap = agents.iter().map(|a| (a.runner_id, a.stake)).collect();
     println!("[coordinator] fleet assembled ({} agents)", agents.len());
 
+    // Pre-compile both canned modules. Production coordinators will pull
+    // modules from a job submission API; for the demo we alternate
+    // between add and mul each job to exercise the module-hash binding.
+    let add_wasm = canned_add_module().expect("canned add module");
+    let mul_wasm = canned_mul_module().expect("canned mul module");
+
     // ── Phase 2: persistent job loop ───────────────────────────────────────
     // Each iteration is one (assign → collect → aggregate → anchor) cycle.
     // Per-job state lives entirely inside the loop body; no leaks across
@@ -82,11 +89,17 @@ fn main() -> std::io::Result<()> {
 
     while completed < max_jobs && !draining.load(Ordering::Relaxed) {
         let job_id = completed + 1;
+        let module = if job_id % 2 == 1 {
+            &add_wasm
+        } else {
+            &mul_wasm
+        };
+        let args = encode_args(job_a, job_b).expect("encode args");
         match run_one_job(
             job_id,
             committee_size,
-            job_a,
-            job_b,
+            module,
+            &args,
             &mut agents,
             &stake_map,
             &mut log,
@@ -186,15 +199,20 @@ fn accept_fleet(
 fn run_one_job(
     job_id: u64,
     committee_size: usize,
-    a: i32,
-    b: i32,
+    module: &[u8],
+    args_cbor: &[u8],
     agents: &mut [RegisteredAgent],
     stake_map: &StakeMap,
     log: &mut MerkleLog,
 ) -> std::io::Result<()> {
     let job_seed = job_seed_bytes(job_id);
     let committee = select_committee_by_pubkey_hash(agents, &job_seed, committee_size);
-    println!("[coordinator] job {job_id} committee: {committee:?}");
+    let mh = cosaci_wasm::wasm_runtime::module_hash(module);
+    println!(
+        "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes)",
+        &mh[..4],
+        module.len()
+    );
 
     // ── Broadcast Assign ───────────────────────────────────────────────
     let deadline = now_unix_ns() + 60_000_000_000;
@@ -204,8 +222,8 @@ fn run_one_job(
                 &mut ag.stream,
                 &Envelope::Assign {
                     job_id,
-                    a,
-                    b,
+                    module: module.to_vec(),
+                    args_cbor: args_cbor.to_vec(),
                     deadline_unix_ns: deadline,
                 },
             )?;

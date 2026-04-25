@@ -11,6 +11,7 @@ publish     = false
 [dependencies]
 cosaci-core     = { path = "../../crates/cosaci-core" }
 cosaci-protocol = { path = "../../crates/cosaci-protocol" }
+cosaci-wasm     = { path = "../../crates/cosaci-wasm" }
 rustls          = { workspace = true }
 sha2            = { workspace = true }
 signal-hook     = { workspace = true }

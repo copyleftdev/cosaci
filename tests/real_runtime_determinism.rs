@@ -8,7 +8,7 @@
 //! Firecracker and Docker runtime determinism remain deferred
 //! (system-level infra requirements).
 
-use cosaci::wasm_runtime::{execute_add, output_hash};
+use cosaci::wasm_runtime::{canned_add_module, execute_add, module_hash, output_hash};
 use hegel::generators;
 
 // Property 1 — same input → same output across repeated executions.
@@ -23,9 +23,10 @@ fn output_is_deterministic_across_repeats(tc: hegel::TestCase) {
 
     assert_eq!(r1, r2, "second run diverged");
     assert_eq!(r2, r3, "third run diverged");
+    let mh = module_hash(&canned_add_module().expect("canned"));
     assert_eq!(
-        output_hash(r1),
-        output_hash(r2),
+        output_hash(&mh, r1),
+        output_hash(&mh, r2),
         "output hash unstable across repeats"
     );
 }
@@ -59,8 +60,44 @@ fn different_results_give_different_hashes(tc: hegel::TestCase) {
     let r2 = execute_add(a2, b2).expect("run 2");
 
     if r1 != r2 {
-        assert_ne!(output_hash(r1), output_hash(r2));
+        let mh = module_hash(&canned_add_module().expect("canned"));
+        assert_ne!(output_hash(&mh, r1), output_hash(&mh, r2));
     }
+}
+
+// Property — different modules with the same i32 result produce
+// different output hashes (the module-hash binding from issue #6).
+#[hegel::test]
+fn different_modules_disambiguate_outputs(tc: hegel::TestCase) {
+    use cosaci::wasm_runtime::{canned_mul_module, encode_args, execute};
+    let a = tc.draw(
+        generators::integers::<i32>()
+            .min_value(-1000)
+            .max_value(1000),
+    );
+    let b = tc.draw(
+        generators::integers::<i32>()
+            .min_value(-1000)
+            .max_value(1000),
+    );
+
+    let add_wasm = canned_add_module().expect("add module");
+    let mul_wasm = canned_mul_module().expect("mul module");
+    let args = encode_args(a, b).expect("encode args");
+
+    let add_result = execute(&add_wasm, &args).expect("add run");
+    let mul_result = execute(&mul_wasm, &args).expect("mul run");
+
+    let h_add = output_hash(&module_hash(&add_wasm), add_result);
+    let h_mul = output_hash(&module_hash(&mul_wasm), mul_result);
+
+    // Two different modules must always produce different output hashes,
+    // even on inputs where add(a,b) == mul(a,b) (e.g. a=0).
+    assert_ne!(
+        h_add, h_mul,
+        "module-hash binding failed: {:?} vs {:?}",
+        h_add, h_mul
+    );
 }
 
 // Property 4 — fresh engines produce the same output (no ambient state).

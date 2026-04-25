@@ -9,5 +9,7 @@ description = "CosaCI: WebAssembly runtime harness (wasmtime, cranelift)"
 publish     = false
 
 [dependencies]
+ciborium = { workspace = true }
 sha2     = { workspace = true }
 wasmtime = { workspace = true }
+wat      = { workspace = true }
