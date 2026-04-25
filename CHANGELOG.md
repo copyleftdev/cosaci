@@ -12,6 +12,42 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — agent enrollment gate (#45, partial)
+
+- New `cosaci-state::enrollment` module: `EnrolledRecord`,
+  `EnrollmentSet`, `is_enrolled(runner_id, signing_fp, vrf_fp)`.
+  Lookup is by `runner_id` AND exact fingerprint match — a matching
+  `runner_id` with divergent fingerprints is rejected, so an
+  attacker who learns an enrolled id can't claim that slot with
+  their own keys.
+- File format (v0.3 MVP): one record per line,
+  whitespace-separated:
+  `<runner_id> <signing_fp_hex> <vrf_fp_hex> <enrolled_at_unix_ns> <initial_reputation>`.
+  Lines starting with `#` are comments. Strict parser rejects
+  malformed records with `InvalidData`.
+- New `fingerprint(pubkey) = SHA-256(pubkey)` and `fingerprint_hex`
+  helpers. The fingerprint is the on-disk shape; raw pubkeys never
+  appear in the enrollment file.
+- Coordinator `--enrollment <path>` flag: load the file at startup
+  and consult it during `accept_fleet`. After mTLS + VRF-of-possession
+  succeed, the gate is the final say on admission. Empty (default)
+  preserves legacy behavior. Rejected agents are logged at
+  `[coordinator] rejecting unenrolled agent runner_id=…`.
+- `demo_networked` derives the FLEET demo agents' deterministic
+  signing + VRF pubkeys, writes their fingerprints to a temp
+  enrollment file, and passes `--enrollment <path>` to coord. The
+  smoke test now exercises the gate end-to-end.
+- New hypothesis card `hypotheses/enrollment-gate-enforcement.md`
+  (class A, Tier 0). Six Hegel properties + 2 smoke tests:
+  enrolled passes; unenrolled rejected; impersonation (matching
+  runner_id, wrong signing_fp / wrong vrf_fp) rejected — both
+  fingerprints; empty set rejects everyone; record round-trips
+  through the v0.3 file format.
+- **Out of scope (follow-on PR):** `cosaci-admin` CLI for
+  enroll/revoke (gated on issue #53), SIGHUP-triggered enrollment
+  reload, persistent runtime revocation. Operators edit the file
+  by hand and restart coord for now.
+
 ### Added — read API for attestations + Merkle proofs (#44)
 
 - `cosaci-core::retrieval` (new): pure `JobRecord`, `JobBundle`, and

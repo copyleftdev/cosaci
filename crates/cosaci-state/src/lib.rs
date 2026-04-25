@@ -8,6 +8,7 @@
 //! Depends on `cosaci-core` for shared primitives (clock, quorum, bloom).
 
 pub mod aggregator;
+pub mod enrollment;
 pub mod lease;
 pub mod partition;
 pub mod rate_limit;

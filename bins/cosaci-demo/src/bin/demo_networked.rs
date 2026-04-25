@@ -11,13 +11,17 @@
 //! Pre-build: `cargo build --bin coordinator --bin agent`.
 //! Run: `cargo run --bin demo_networked`.
 
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use cosaci_core::signing::Keypair;
 use cosaci_protocol::tls::{SUBJECT_SERVER, TestCa, install_crypto_provider};
+use cosaci_state::enrollment::{fingerprint, fingerprint_hex};
+use cosaci_vrf::vrf::VrfKeypair;
 
 const ADDR_BOUNDED: &str = "127.0.0.1:7879";
 const ADDR_SIGTERM: &str = "127.0.0.1:7880";
@@ -33,6 +37,9 @@ struct Certs {
     server_cert: PathBuf,
     server_key: PathBuf,
     agents: Vec<(PathBuf, PathBuf)>,
+    /// Path to the enrollment file (issue #45) listing the FLEET demo
+    /// agents — coord rejects any registration not on this list.
+    enrollment: PathBuf,
 }
 
 fn main() {
@@ -125,6 +132,8 @@ fn run_round(
         FLEET.to_string(),
         "--committee".into(),
         COMMITTEE.to_string(),
+        "--enrollment".into(),
+        certs.enrollment.to_string_lossy().into(),
     ];
     if let RoundKind::Bounded { read_addr } = kind {
         coord_args.push("--max-jobs".into());
@@ -287,12 +296,41 @@ fn generate_certs() -> Certs {
         agents.push((cert_path, key_path));
     }
 
+    // Enrollment file (issue #45). Pre-enroll the FLEET demo agents
+    // by deriving the same deterministic seeds the agent binary uses
+    // and writing their pubkey fingerprints. Coord rejects any
+    // registration not on this list.
+    let enrollment_path = temp_dir.join("enrollment.txt");
+    let now_unix_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    let mut enrollment_text = String::from("# CosaCI demo enrollment file\n");
+    for i in 0..FLEET {
+        let mut signing_seed = [0_u8; 32];
+        let mut vrf_seed = [0_u8; 32];
+        signing_seed[..8].copy_from_slice(&i.to_le_bytes());
+        vrf_seed[..8].copy_from_slice(&i.to_le_bytes());
+        vrf_seed[8] = 0xff;
+        let signing_pk = Keypair::from_seed(signing_seed).verifying_key().to_bytes();
+        let vrf_pk = VrfKeypair::from_seed(vrf_seed).public_key_bytes();
+        enrollment_text.push_str(&format!(
+            "{} {} {} {} 1.0\n",
+            i,
+            fingerprint_hex(&fingerprint(&signing_pk)),
+            fingerprint_hex(&fingerprint(&vrf_pk)),
+            now_unix_ns
+        ));
+    }
+    fs::write(&enrollment_path, enrollment_text).expect("write enrollment file");
+
     Certs {
         temp_dir,
         ca: ca_path,
         server_cert: server_cert_path,
         server_key: server_key_path,
         agents,
+        enrollment: enrollment_path,
     }
 }
 
