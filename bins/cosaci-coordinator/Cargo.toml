@@ -21,3 +21,6 @@ signal-hook     = { workspace = true }
 [[bin]]
 name = "coordinator"
 path = "src/main.rs"
+
+[lints]
+workspace = true

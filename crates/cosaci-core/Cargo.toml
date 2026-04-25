@@ -16,3 +16,6 @@ rs_merkle        = { workspace = true }
 serde            = { workspace = true }
 serde-big-array  = { workspace = true }
 sha2             = { workspace = true }
+
+[lints]
+workspace = true

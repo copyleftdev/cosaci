@@ -200,10 +200,7 @@ impl LeaseTest {
             if !currently_active.contains(&lid) {
                 let state = self.manager.state_of(lid);
                 assert!(
-                    matches!(
-                        state,
-                        Some(LeaseState::Completed) | Some(LeaseState::Expired)
-                    ),
+                    matches!(state, Some(LeaseState::Completed | LeaseState::Expired)),
                     "lease {} should be Completed or Expired, got {:?}",
                     lid,
                     state

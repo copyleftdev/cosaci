@@ -35,7 +35,7 @@ pub fn compute_root(leaves: &[LeafHash]) -> Option<LeafHash> {
         return None;
     }
     let mut sorted = leaves.to_vec();
-    sorted.sort();
+    sorted.sort_unstable();
     MerkleTree::<Sha256>::from_leaves(&sorted).root()
 }
 
@@ -58,7 +58,7 @@ pub fn inclusion_proof(leaves: &[LeafHash], leaf: LeafHash) -> Option<InclusionP
         return None;
     }
     let mut sorted = leaves.to_vec();
-    sorted.sort();
+    sorted.sort_unstable();
     let index = sorted.iter().position(|&l| l == leaf)?;
     let tree = MerkleTree::<Sha256>::from_leaves(&sorted);
     let proof = tree.proof(&[index]);

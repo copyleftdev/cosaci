@@ -46,6 +46,7 @@ impl NodeState {
         }
     }
 
+    #[must_use]
     pub fn get(&self, key: Key) -> Option<Entry> {
         self.entries.get(&key).copied()
     }
@@ -70,10 +71,10 @@ impl NodeState {
 /// `a.value >= b.value`. Non-strict on tie to make the relation a
 /// total preorder for determinism.
 fn entry_dominates(a: Entry, b: Entry) -> bool {
-    if a.timestamp != b.timestamp {
-        a.timestamp > b.timestamp
-    } else {
+    if a.timestamp == b.timestamp {
         a.value >= b.value
+    } else {
+        a.timestamp > b.timestamp
     }
 }
 

@@ -24,6 +24,64 @@ license    = "MIT OR Apache-2.0"
 repository = "https://github.com/copyleftdev/cosaci"
 authors    = ["copyleftdev"]
 
+# ─── Workspace lints (issue #9) ──────────────────────────────────────────
+# Pedantic-as-warn at the workspace root; CI's `cargo clippy ... -D
+# warnings` escalates them to errors. Members opt in via:
+#     [lints]
+#     workspace = true
+#
+# The `priority = -1` on the group so the explicit per-lint allows below
+# can override it. Each allow has a justification — we don't disable
+# whole categories without one.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# We deal in u64/usize ID and size quantities all over the protocol and
+# storage layers; on 64-bit hosts (the only target we support) these
+# casts are exact, and the lints fire on every line that touches them.
+cast_possible_truncation = "allow"
+cast_possible_wrap       = "allow"
+cast_precision_loss      = "allow"
+cast_sign_loss           = "allow"
+
+# `mod attestation { pub struct Attestation }` is the canonical Rust
+# pattern for a focused module; renaming the type to satisfy this lint
+# would harm readability everywhere it's used.
+module_name_repetitions = "allow"
+
+# Library functions return `Result<_, String>` (and similar simple
+# error types) and the failure modes are documented in the body of
+# the doc comment — not always under a `# Errors` heading. Adding the
+# heading boilerplate to every fallible fn isn't worth the churn.
+missing_errors_doc = "allow"
+
+# `# Panics` headings are useful when a non-obvious panic exists, but
+# requiring them on every fn that could panic via slicing produces
+# more noise than value at this stage.
+missing_panics_doc = "allow"
+
+# Project names ("CosaCI", "WebAssembly", "TigerBeetle") trigger this
+# lint because of their capitalization. Backticking brand names in
+# every doc comment reads like the docs are quoting code; we'd rather
+# keep the prose readable.
+doc_markdown = "allow"
+
+# Hegel's `#[hegel::test]` and `#[hegel::state_machine]` macros define
+# every rule/test as `fn(tc: TestCase)` — even when the body doesn't
+# draw from `tc`. Pedantic flags `tc` as "passed by value but not
+# consumed"; the shape is set by the third-party macro.
+needless_pass_by_value = "allow"
+
+# Older `format!("{}", x)` style is sometimes clearer than `{x}` when
+# the variable name is long or shadowed. Modernizing every callsite
+# isn't worth the churn at this stage.
+uninlined_format_args = "allow"
+
+# Tests use `n, k, m, i, j` for numeric quantities — the conventional
+# names in property-based testing. The lint trips on otherwise-readable
+# combinations that wouldn't benefit from a rename.
+many_single_char_names = "allow"
+
 [workspace.dependencies]
 chacha20poly1305 = "0.10.1"
 ciborium         = "0.2.2"
@@ -81,3 +139,6 @@ sha2        = { workspace = true }
 [[bench]]
 name    = "hot_paths"
 harness = false
+
+[lints]
+workspace = true

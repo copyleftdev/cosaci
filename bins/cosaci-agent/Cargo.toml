@@ -19,3 +19,6 @@ rustls          = { workspace = true }
 [[bin]]
 name = "agent"
 path = "src/main.rs"
+
+[lints]
+workspace = true

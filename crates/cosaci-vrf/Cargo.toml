@@ -11,3 +11,6 @@ publish     = false
 [dependencies]
 merlin     = { workspace = true }
 schnorrkel = { workspace = true }
+
+[lints]
+workspace = true

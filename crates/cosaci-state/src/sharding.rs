@@ -39,7 +39,7 @@ pub type Value = u64;
 pub fn shard_of(key: Key, n_shards: usize) -> usize {
     assert!(n_shards > 0, "n_shards must be > 0");
     let mut h = 0xcbf2_9ce4_8422_2325_u64 ^ key;
-    h = h.wrapping_mul(0x100000001b3);
+    h = h.wrapping_mul(0x0000_0100_0000_01b3);
     h ^= h >> 33;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
