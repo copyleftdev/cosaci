@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1.7
+
+# Tiny init image that generates a demo CA + per-agent certs for the
+# Compose stack. NOT for production — production certs come from the
+# operator's own PKI. This image exists only so `docker compose up`
+# can produce a working CosaCI fleet on a fresh checkout.
+
+FROM alpine:3.22
+
+RUN apk add --no-cache openssl bash
+
+COPY contrib/docker/bootstrap.sh /usr/local/bin/bootstrap
+RUN chmod +x /usr/local/bin/bootstrap
+
+ENTRYPOINT ["/usr/local/bin/bootstrap"]

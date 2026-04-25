@@ -1,0 +1,87 @@
+# Templated systemd unit for the CosaCI agent. The instance name is
+# the runner_id: `systemctl start cosaci-agent@7` runs runner_id=7.
+#
+# Install:
+#   sudo install -Dm0755 target/release/agent /usr/local/bin/cosaci-agent
+#   sudo install -Dm0644 contrib/systemd/cosaci-agent@.service \
+#       /etc/systemd/system/cosaci-agent@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cosaci-agent@0 cosaci-agent@1 ...
+#
+# Configuration: per-instance overrides go in
+# /etc/cosaci/agent-%i.env (where %i is the instance name); shared
+# config in /etc/cosaci/agent.env. Drop-in overrides at
+# /etc/systemd/system/cosaci-agent@.service.d/*.conf.
+
+[Unit]
+Description=CosaCI agent (runner_id %i)
+Documentation=https://github.com/copyleftdev/cosaci
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/cosaci-agent \
+    --id %i \
+    --addr ${COSACI_COORD_ADDR} \
+    --ca ${COSACI_CA} \
+    --cert ${COSACI_AGENT_CERT} \
+    --key ${COSACI_AGENT_KEY} \
+    --server-name ${COSACI_SERVER_NAME} \
+    --stake ${COSACI_STAKE}
+
+# Two layers of env: shared then per-instance. The per-instance file
+# is allowed to be missing (`-` prefix); use it for per-runner cert
+# paths if your fleet doesn't follow the default
+# /etc/cosaci/agent-%i.{pem,key.pem} convention.
+EnvironmentFile=-/etc/cosaci/agent.env
+EnvironmentFile=-/etc/cosaci/agent-%i.env
+Environment=COSACI_COORD_ADDR=coordinator.local:7878
+Environment=COSACI_CA=/etc/cosaci/ca.pem
+Environment=COSACI_AGENT_CERT=/etc/cosaci/agent-%i.pem
+Environment=COSACI_AGENT_KEY=/etc/cosaci/agent-%i.key.pem
+Environment=COSACI_SERVER_NAME=cosaci.local
+Environment=COSACI_STAKE=100
+
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=5s
+
+User=cosaci
+Group=cosaci
+
+WorkingDirectory=/var/lib/cosaci
+StateDirectory=cosaci/agent-%i
+ConfigurationDirectory=cosaci
+LogsDirectory=cosaci
+
+# Hardening (mirrors the coordinator unit; same wasmtime/MDWE
+# exception applies).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ReadOnlyPaths=/etc/cosaci
+ReadWritePaths=/var/lib/cosaci /var/log/cosaci
+SystemCallArchitectures=native
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

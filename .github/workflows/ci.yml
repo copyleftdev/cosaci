@@ -121,3 +121,86 @@ jobs:
 
       - name: Run cargo deny
         run: cargo deny check
+
+  # Deployment-artifact build gate (issue #49). Verify that both
+  # production Dockerfiles build successfully on every PR. Single
+  # arch (amd64) for speed; multi-arch (arm64) is exercised at
+  # release-tag time in a separate workflow.
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build coordinator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/docker/Dockerfile.coordinator
+          push: false
+          load: true
+          tags: cosaci-coordinator:ci
+          cache-from: type=gha,scope=cosaci-coordinator
+          cache-to: type=gha,scope=cosaci-coordinator,mode=max
+
+      - name: Build agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/docker/Dockerfile.agent
+          push: false
+          load: true
+          tags: cosaci-agent:ci
+          cache-from: type=gha,scope=cosaci-agent
+          cache-to: type=gha,scope=cosaci-agent,mode=max
+
+      - name: Build bootstrap image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/docker/Dockerfile.bootstrap
+          push: false
+          load: true
+          tags: cosaci-bootstrap:ci
+          cache-from: type=gha,scope=cosaci-bootstrap
+          cache-to: type=gha,scope=cosaci-bootstrap,mode=max
+
+      - name: Smoke-check coordinator binary in image
+        run: |
+          # The image entrypoint is `coordinator`; with no args it
+          # tries to listen and fails (no certs). We check that --help
+          # / --version-style invocation either succeeds or fails for
+          # the expected reason (cert missing) — not for a broken
+          # binary.
+          docker run --rm cosaci-coordinator:ci --addr 127.0.0.1:0 \
+              --ca /nonexistent --cert /nonexistent --key /nonexistent \
+              2>&1 | tee /tmp/out || true
+          grep -E "(NotFound|No such file)" /tmp/out
+
+      - name: Smoke-check agent binary in image
+        run: |
+          docker run --rm cosaci-agent:ci --id 0 --addr 127.0.0.1:0 \
+              --ca /nonexistent --cert /nonexistent --key /nonexistent \
+              --server-name x --stake 0 \
+              2>&1 | tee /tmp/out || true
+          grep -E "(NotFound|No such file)" /tmp/out
+
+      - name: Smoke-check bootstrap script
+        run: |
+          # Run the bootstrap container against a fresh tmp dir.
+          # Verify it generates a CA + 5 agent certs.
+          mkdir -p /tmp/cosaci-certs
+          docker run --rm \
+              -e FLEET=5 \
+              -v /tmp/cosaci-certs:/certs \
+              cosaci-bootstrap:ci
+          test -f /tmp/cosaci-certs/ca.pem
+          test -f /tmp/cosaci-certs/server.pem
+          test -f /tmp/cosaci-certs/agent-0.pem
+          test -f /tmp/cosaci-certs/agent-4.pem

@@ -12,6 +12,39 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — deployment artifacts: Docker + Compose + systemd (#49)
+
+- `contrib/docker/Dockerfile.coordinator` and
+  `contrib/docker/Dockerfile.agent`: multi-stage builds on
+  `rust:1.94-slim-bookworm`, runtime on `debian:bookworm-slim`.
+  Both run as non-root `cosaci` user, expect mTLS certs at
+  `/etc/cosaci/{ca,server,agent}.pem`, and persist coordinator
+  state at `/var/lib/cosaci/`.
+- `contrib/docker/Dockerfile.bootstrap` + `bootstrap.sh`: a tiny
+  Alpine init image that generates a demo CA + per-fleet certs
+  into a shared volume. **Demo only** — the certs live in a Docker
+  volume and never leave it; production uses the operator's PKI.
+- `contrib/docker-compose.yml`: brings up
+  bootstrap → coordinator → 5 agents in one `docker compose up`.
+  The non-Rust equivalent of `cargo run -p cosaci-demo --bin
+  demo_networked` for hands-on smoke testing.
+- `contrib/systemd/cosaci-coordinator.service` and
+  `cosaci-agent@.service` (templated by runner_id). Hardening
+  defaults: `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `PrivateUsers`,
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`,
+  `RestrictNamespaces`, `LockPersonality`. `MemoryDenyWriteExecute=no`
+  is the documented exception (wasmtime JIT requires write-then-execute
+  on the same mapping).
+- `contrib/README.md`: install + usage guide for all three tracks.
+- CI gate: `Docker images build` job verifies both production
+  Dockerfiles + the bootstrap image build on every PR. Caches via
+  GHA buildx cache. Smoke-checks each image's entrypoint with
+  intentionally-missing cert paths; expects `NotFound` rather than
+  a broken binary.
+- **Out of scope (follow-on PR):** GHCR push on tagged release;
+  multi-arch build verification (`linux/arm64`) — release-tag job.
+
 ### Added — agent enrollment gate (#45, partial)
 
 - New `cosaci-state::enrollment` module: `EnrolledRecord`,
