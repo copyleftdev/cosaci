@@ -12,6 +12,61 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — admin wire-protocol (read-only) (#53 follow-on)
+
+- New `cosaci-state::admin_auth` module: `AdminRecord`,
+  `AdminKeySet`, `verify_admin_hello`. Allowlist file
+  format mirrors `enrollment.txt` and `tenants.txt` (one
+  syntax for all three operator-managed files):
+  `admin_id signing_fp_hex enrolled_at_unix_ns`. Stores the
+  pubkey fingerprint, not the raw key.
+- New protocol envelopes in `cosaci-protocol::proto`:
+  `AdminHello`, `AdminWelcome`, `AdminError`,
+  `AdminListAgents`, `AdminAgentList { entries }`,
+  `AdminGetLogRoot`, `AdminLogRoot { root, length }`. Plus
+  `ADMIN_HELLO_CHALLENGE` (`b"cosaci-admin-hello-v1"`) and
+  `ADMIN_HELLO_FRESHNESS_NS` (60s default).
+- AdminHello signs `(challenge ‖ ts_unix_ns.to_le_bytes())`
+  under the admin's ed25519 key. Verifier checks
+  `SHA-256(pubkey)` is in the allowlist + signature
+  verifies + `|ts - now| ≤ freshness`. **Failure verdicts
+  are merged on purpose** — distinct error responses for
+  unknown-key vs bad-sig vs stale-ts would leak which
+  admin keys are configured.
+- Coordinator gains `--admin-addr <addr>` + `--admin-keys
+  <path>`. Empty admin-addr disables; non-empty starts a
+  second mTLS listener that accepts one-shot
+  `AdminHello → (AdminListAgents | AdminGetLogRoot) →
+  response → close` sessions on a daemon thread (per-
+  request handler thread spawned per accepted connection).
+  Uses the same `SharedServerConfig` SIGHUP-reloaded TLS
+  config as the agent + read API listeners.
+- `cosaci-admin` CLI gains a wire-protocol mode for both
+  `agents list` and `log root`. Mode is selected by which
+  flag is present — `--enrollment` / `--log` keeps the
+  existing filesystem path; `--coord <addr> --ca <ca.pem>
+  --cert <admin.pem> --key <admin.key.pem> --admin-key
+  <seed>` switches to wire mode. Both modes produce
+  identical output formatting so monitoring scripts work
+  unchanged across the switch.
+- New hypothesis card `hypotheses/admin-auth-gate.md`
+  (class A, Tier 0). Six tests: well-formed hello admits;
+  unknown admin rejected; tampered timestamp rejected;
+  stale timestamp rejected; wrong challenge rejected;
+  freshness boundary at exactly the window accepts (`+1`
+  rejects). Closes the falsifiable claim of the admin
+  wire-protocol.
+- New deps in `bins/cosaci-admin`: `cosaci-protocol`
+  (path), `rustls` (workspace) for the wire-mode client.
+- **Out of scope (follow-on PR).** Mutating admin
+  operations (`agents enroll/revoke`, `tenants
+  add/revoke`) — these need an in-memory state lock + an
+  enrollment-reload story; that's a separate PR. Per-
+  request signing (today the session is trusted for the
+  lifetime of the mTLS connection after the hello).
+  Audit-log persistence (each accepted hello logs to
+  `tracing` but isn't journaled).
+
 ### Added — webhook listener bin (#52 follow-on)
 
 - New workspace bin `bins/cosaci-webhook-listener/` (binary

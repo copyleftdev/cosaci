@@ -12,8 +12,10 @@ categories  = ["command-line-utilities"]
 publish     = false
 
 [dependencies]
-cosaci-core  = { path = "../../crates/cosaci-core" }
-cosaci-state = { path = "../../crates/cosaci-state" }
+cosaci-core     = { path = "../../crates/cosaci-core" }
+cosaci-protocol = { path = "../../crates/cosaci-protocol" }
+cosaci-state    = { path = "../../crates/cosaci-state" }
+rustls          = { workspace = true }
 
 # Short bin name; the runbook + dockerfile examples expect this.
 [[bin]]

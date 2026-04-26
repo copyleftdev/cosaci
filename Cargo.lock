@@ -374,7 +374,9 @@ name = "cosaci-admin"
 version = "0.2.0"
 dependencies = [
  "cosaci-core",
+ "cosaci-protocol",
  "cosaci-state",
+ "rustls",
 ]
 
 [[package]]

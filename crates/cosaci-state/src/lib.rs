@@ -7,6 +7,7 @@
 //! sharding/handoff, replay windows, rate limiters, replicated cluster).
 //! Depends on `cosaci-core` for shared primitives (clock, quorum, bloom).
 
+pub mod admin_auth;
 pub mod aggregator;
 pub mod enrollment;
 pub mod github_checks;

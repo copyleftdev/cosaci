@@ -35,8 +35,12 @@ use cosaci_core::merkle_log::{FileStore, MerkleLog, hash_bytes};
 use cosaci_core::quorum::{Outcome, RunnerId, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::retrieval::{JobRecord, build_bundle};
 use cosaci_core::signing::VerifyingKey;
-use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
+use cosaci_protocol::proto::{
+    ADMIN_HELLO_CHALLENGE, ADMIN_HELLO_FRESHNESS_NS, AdminAgentRecord, Envelope,
+    VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope,
+};
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
+use cosaci_state::admin_auth::{AdminAuthCheck, AdminKeySet, verify_admin_hello};
 use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
 use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_state, replay};
 use cosaci_state::rate_limit::RateLimiter;
@@ -214,6 +218,15 @@ fn main() -> std::io::Result<()> {
     // verify every submission's signature, and rate-limit admission
     // per the tenant's configured token bucket.
     let tenants_path = arg_or(&args, "--tenants", "");
+    // `--admin-addr <addr>` + `--admin-keys <path>` (issue #53
+    // follow-on): enable the admin wire-protocol listener.
+    // Empty admin-addr disables; non-empty starts a second mTLS
+    // listener that accepts `AdminHello` + (`AdminListAgents` |
+    // `AdminGetLogRoot`) one-shot sessions. The admin-keys file
+    // is the allowlist of admin pubkey fingerprints (parsed via
+    // `cosaci-state::admin_auth::AdminKeySet`).
+    let admin_addr = arg_or(&args, "--admin-addr", "");
+    let admin_keys_path = arg_or(&args, "--admin-keys", "");
 
     let enrollment: Option<Arc<EnrollmentSet>> = if enrollment_path.is_empty() {
         None
@@ -340,6 +353,32 @@ fn main() -> std::io::Result<()> {
             log.clone(),
         )?;
         tracing::info!("[coordinator] read API listening on {read_addr} (mTLS)");
+    }
+
+    // Admin wire-protocol listener (issue #53 follow-on). Read-
+    // only in v0.3: AdminListAgents + AdminGetLogRoot. Mutating
+    // operations (enroll/revoke) stay in the file-only admin
+    // CLI until a follow-on PR.
+    if !admin_addr.is_empty() {
+        if admin_keys_path.is_empty() {
+            return Err(std::io::Error::other(
+                "--admin-addr requires --admin-keys (cannot enable admin listener without an allowlist)",
+            ));
+        }
+        let admin_keys = AdminKeySet::load_from_path(&admin_keys_path)?;
+        tracing::info!(
+            "[coordinator] admin allowlist loaded ({} key(s) from {})",
+            admin_keys.len(),
+            admin_keys_path
+        );
+        spawn_admin_server(
+            admin_addr.clone(),
+            shared_cfg.clone(),
+            Arc::new(admin_keys),
+            enrollment_path.clone(),
+            log.clone(),
+        )?;
+        tracing::info!("[coordinator] admin listener on {admin_addr} (mTLS + signed AdminHello)");
     }
 
     // Tenant registry + rate limiter (issue #46). Empty path =
@@ -1356,6 +1395,185 @@ fn spawn_read_server(
         }
     });
     Ok(())
+}
+
+fn spawn_admin_server(
+    addr: String,
+    shared_cfg: SharedServerConfig,
+    admin_keys: Arc<AdminKeySet>,
+    enrollment_path: String,
+    log: Arc<Mutex<LogBackend>>,
+) -> std::io::Result<()> {
+    let listener = TcpListener::bind(&addr)?;
+    thread::spawn(move || {
+        loop {
+            let (tcp, peer) = match listener.accept() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("[coordinator/admin] accept error: {e}");
+                    continue;
+                }
+            };
+            let _ = tcp.set_nodelay(true);
+            let cfg_snapshot = shared_cfg.lock().expect("shared cfg poisoned").clone();
+            let conn = match ServerConnection::new(cfg_snapshot) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("[coordinator/admin] ServerConnection::new for {peer}: {e}");
+                    continue;
+                }
+            };
+            let stream = ServerStream::new(conn, tcp);
+            let admin_keys = admin_keys.clone();
+            let enrollment_path = enrollment_path.clone();
+            let log = log.clone();
+            thread::spawn(move || {
+                handle_admin_client(stream, peer, &admin_keys, &enrollment_path, &log);
+            });
+        }
+    });
+    Ok(())
+}
+
+fn handle_admin_client(
+    mut stream: ServerStream,
+    peer: std::net::SocketAddr,
+    admin_keys: &AdminKeySet,
+    enrollment_path: &str,
+    log: &Arc<Mutex<LogBackend>>,
+) {
+    let hello = match read_envelope(&mut stream) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[coordinator/admin] {peer}: hello read failed: {e}");
+            return;
+        }
+    };
+    let Envelope::AdminHello {
+        admin_pubkey,
+        ts_unix_ns,
+        signature,
+    } = hello
+    else {
+        tracing::warn!("[coordinator/admin] {peer}: first envelope was not AdminHello");
+        let _ = write_envelope(
+            &mut stream,
+            &Envelope::AdminError {
+                reason: "expected AdminHello".to_string(),
+            },
+        );
+        return;
+    };
+
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let clock = AdminWallClock { now_ns };
+    let verdict = verify_admin_hello(
+        admin_keys,
+        &admin_pubkey,
+        ts_unix_ns,
+        &signature,
+        ADMIN_HELLO_CHALLENGE,
+        ADMIN_HELLO_FRESHNESS_NS,
+        &clock,
+    );
+    let admin_id = match verdict {
+        AdminAuthCheck::Ok { admin_id } => admin_id,
+        AdminAuthCheck::Unauthorized => {
+            tracing::warn!("[coordinator/admin] {peer}: AdminHello unauthorized");
+            let _ = write_envelope(
+                &mut stream,
+                &Envelope::AdminError {
+                    reason: "unauthorized".to_string(),
+                },
+            );
+            return;
+        }
+    };
+    if let Err(e) = write_envelope(&mut stream, &Envelope::AdminWelcome) {
+        tracing::warn!("[coordinator/admin] {peer}: welcome write failed: {e}");
+        return;
+    }
+    tracing::info!("[coordinator/admin] {peer}: admin_id={admin_id} session opened");
+
+    let req = match read_envelope(&mut stream) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[coordinator/admin] {peer}: request read failed: {e}");
+            return;
+        }
+    };
+    let resp = match req {
+        Envelope::AdminListAgents => match EnrollmentSet::load_from_path(enrollment_path) {
+            Ok(set) => {
+                let mut entries: Vec<AdminAgentRecord> = set
+                    .iter()
+                    .map(|r| AdminAgentRecord {
+                        runner_id: r.runner_id,
+                        signing_fp: r.signing_fp,
+                        vrf_fp: r.vrf_fp,
+                        enrolled_at_unix_ns: r.enrolled_at_unix_ns,
+                        initial_reputation_thousandths: (r.initial_reputation() * 1000.0)
+                            .round()
+                            .clamp(0.0, 1000.0)
+                            as u32,
+                    })
+                    .collect();
+                entries.sort_by_key(|e| e.runner_id);
+                tracing::info!(
+                    "[coordinator/admin] {peer}: admin_id={admin_id} agents list ({} record(s))",
+                    entries.len()
+                );
+                Envelope::AdminAgentList { entries }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[coordinator/admin] {peer}: admin_id={admin_id} agents list failed: {e}"
+                );
+                Envelope::AdminError {
+                    reason: format!("enrollment file: {e}"),
+                }
+            }
+        },
+        Envelope::AdminGetLogRoot => {
+            let log_g = log.lock().expect("log mutex poisoned");
+            tracing::info!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} log root (length={})",
+                log_g.len()
+            );
+            Envelope::AdminLogRoot {
+                root: log_g.root(),
+                length: log_g.len(),
+            }
+        }
+        other => {
+            tracing::warn!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} unexpected envelope after hello: {other:?}"
+            );
+            Envelope::AdminError {
+                reason: "unsupported admin operation".to_string(),
+            }
+        }
+    };
+    if let Err(e) = write_envelope(&mut stream, &resp) {
+        tracing::warn!("[coordinator/admin] {peer}: response write failed: {e}");
+    }
+}
+
+/// Wall-clock `Clock` impl for the admin handler. The
+/// trait-injected clock means the admin auth path is also
+/// usable from a `SimClock`-driven test if we ever want to
+/// drive it under DST.
+struct AdminWallClock {
+    now_ns: u64,
+}
+
+impl cosaci_core::clock::Clock for AdminWallClock {
+    fn now_ns(&self) -> u64 {
+        self.now_ns
+    }
 }
 
 fn handle_read_client(
