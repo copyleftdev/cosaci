@@ -303,7 +303,12 @@ fn main() -> std::io::Result<()> {
         // `verify_and_admit` call passes per-tenant capacity +
         // refill via `accept_with_config`.
         let limiter = RateLimiter::new(SystemClock, 0, 0);
-        Some(Arc::new(Mutex::new(AuthState { registry, limiter })))
+        let replay = cosaci_state::replay::ReplayGuard::new(SystemClock, REPLAY_TTL_NS);
+        Some(Arc::new(Mutex::new(AuthState {
+            registry,
+            limiter,
+            replay,
+        })))
     };
 
     // Initial server config; will be hot-swappable via SIGHUP.
@@ -1001,13 +1006,27 @@ fn hex_lower(bytes: &[u8]) -> String {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Mutable state the stdin reader consults on every line: the
-/// loaded tenant registry + a per-tenant token-bucket limiter.
+/// loaded tenant registry, a per-tenant token-bucket limiter,
+/// and a replay-protection guard over submitted nonces.
 /// Wrapped in `Arc<Mutex<...>>` because the reader thread mutates
-/// the limiter (consuming tokens) on each accepted submission.
+/// the limiter (token spend) and replay guard (nonce record) on
+/// each accepted submission.
 struct AuthState {
     registry: TenantRegistry,
     limiter: RateLimiter<SystemClock>,
+    /// Nonce-replay guard. v0.3 default TTL is 5 minutes
+    /// (`REPLAY_TTL_NS` below) — long enough to absorb
+    /// realistic clock skew between submitter and coord but
+    /// short enough that the in-memory active set stays
+    /// bounded under steady traffic.
+    replay: cosaci_state::replay::ReplayGuard<SystemClock>,
 }
+
+/// Replay-protection TTL for submitted nonces, in
+/// nanoseconds. 5 minutes — the value documented in
+/// `hypotheses/submission-auth-gate.md`'s Out-of-scope-now-
+/// closed entry.
+const REPLAY_TTL_NS: u64 = 5 * 60 * 1_000_000_000;
 
 /// Spawn a daemon thread that reads NDJSON `JobSubmission` records
 /// from stdin and pushes them to the bounded queue. Each line is
@@ -1058,8 +1077,9 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
                 let AuthState {
                     ref registry,
                     ref mut limiter,
+                    ref mut replay,
                 } = *g;
-                let verdict = check_submission(&sub, registry, limiter);
+                let verdict = check_submission(&sub, registry, limiter, replay);
                 match verdict {
                     AuthCheck::Ok => {}
                     AuthCheck::UnknownTenant => {
@@ -1086,6 +1106,17 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
                         tracing::warn!(
                             "[coordinator] auth gate: rate-limited (tenant_id={:?} kind={:?} a={} b={})",
                             sub.tenant_id,
+                            sub.kind,
+                            sub.a,
+                            sub.b
+                        );
+                        continue;
+                    }
+                    AuthCheck::ReplayDetected => {
+                        tracing::warn!(
+                            "[coordinator] auth gate: REPLAY (tenant_id={:?} nonce={:?} kind={:?} a={} b={}) — operator: investigate buggy producer or active attacker",
+                            sub.tenant_id,
+                            sub.nonce,
                             sub.kind,
                             sub.a,
                             sub.b
@@ -1124,6 +1155,7 @@ fn check_submission(
     sub: &JobSubmission,
     registry: &TenantRegistry,
     limiter: &mut RateLimiter<SystemClock>,
+    replay: &mut cosaci_state::replay::ReplayGuard<SystemClock>,
 ) -> AuthCheck {
     let (Some(tenant_id), Some(nonce), Some(pubkey_hex), Some(signature_hex)) = (
         sub.tenant_id,
@@ -1147,7 +1179,13 @@ fn check_submission(
         deadline_secs: sub.deadline_secs,
         nonce,
     };
-    verify_and_admit(&payload, &pubkey, &signature, registry, limiter)
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    verify_and_admit(
+        &payload, &pubkey, &signature, now_ns, registry, limiter, replay,
+    )
 }
 
 /// Parse 128 lowercase-hex chars into a `[u8; 64]` (an ed25519
