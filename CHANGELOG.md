@@ -12,6 +12,30 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Changed — docs / audit-trail follow-ups
+
+- `hypotheses/index.md` re-synced with disk: Tier 0 row count
+  bumped 20 → 21 and Tier 1 8 → 9 in the section headers (the
+  rows themselves were already there); `merkle-log-persistence`
+  status `encoded` → `**passing**` (its 4-test file has been
+  passing for several PRs); totals line corrected to
+  `30 A + 6 B-stat + 4 C + 3 D = 43 cards · 41 passing` and the
+  follow-on summary line bumped to `36/36 passing` for the
+  combined A + B-stat tier.
+- `docs/RUNBOOK.md` §6 (Debugging a stuck job) rewritten now
+  that tracing + `RUST_LOG` landed in #47: the section now shows
+  a real `journalctl -f | grep "job_id=N"` workflow plus a `jq`
+  recipe for slicing the NDJSON journal by job id, instead of
+  the prior `PARTIAL — observability shipping in #47` stub. The
+  Prometheus + OTLP exporter callout is preserved as an explicit
+  follow-on.
+- §7 (Slashing review) re-marked from `DEFERRED` to
+  `PARTIAL — slashing-faithfulness primitive landed (#35); the
+  production ledger + automatic revocation is follow-on`.
+- §"Issues that will fill the gaps" table updated to reflect
+  what's actually shipped vs. still pending for #47, #51, and
+  #35.
+
 ### Changed — structured logging via tracing (#47, partial)
 
 - Coordinator and agent binaries now emit logs via `tracing` +

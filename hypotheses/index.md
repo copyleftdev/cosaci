@@ -13,7 +13,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-## Tier 0 — Core algebra (20 cards, all A)
+## Tier 0 — Core algebra (21 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
@@ -39,14 +39,14 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `egress-policy-evaluation` | §6.4 | A | **passing** | `tests/egress_policy_evaluation.rs` | cosaci-jobs (#54, partial) |
 | `crash-recovery-soundness` | §10.5 | A | **passing** | `tests/crash_recovery_soundness.rs` | serde_json + tempfile (#51, partial) |
 
-## Tier 1 — Scale primitives (8 cards, all A)
+## Tier 1 — Scale primitives (9 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
 | `coordinator-shard-algebra` | §4.1.1 | A | **passing** | `tests/coordinator_shard_algebra.rs` + `tests/shard_incremental_handoff.rs` | hand-rolled + handoff + replicas |
 | `vrf-assignment-uniformity` | §7.1 | A | **passing** | `tests/vrf_assignment_uniformity.rs` | schnorrkel 0.11 + merlin 3.0 |
 | `merkle-log-append-only` | §10.2 | A | **passing** | `tests/merkle_log_append_only.rs` + `tests/merkle_log_mmr_peaks.rs` | rs_merkle 1.5 + MMR peaks |
-| `merkle-log-persistence` | §10.5 | A | encoded | `tests/merkle_log_persistence.rs` | tempfile + FileStore (#33) |
+| `merkle-log-persistence` | §10.5 | A | **passing** | `tests/merkle_log_persistence.rs` | tempfile + FileStore (#33) |
 | `tenant-rate-limit` | §13 (new) | A | **passing** | `tests/tenant_rate_limit.rs` | hand-rolled token bucket |
 | `partition-invariants` | §12.3 | A | **passing** | `tests/partition_invariants.rs` + `tests/replicated_cluster_split_brain.rs` | Clock ✓ + gate + 2-replica model |
 | `confidentiality-algebra` | §9 (new) | A | **passing** | `tests/confidentiality_algebra.rs` | chacha20poly1305 0.10 |
@@ -83,9 +83,9 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-**Totals:** 27 A + 6 B-stat + 4 C + 3 D = **40 cards** · **38 passing**.
+**Totals:** 30 A + 6 B-stat + 4 C + 3 D = **43 cards** · **41 passing**.
 
-- All A and B-stat cards: 26/26 passing with **no deferred sub-claims** (every original † closed).
+- All A and B-stat cards: **36/36 passing** with no deferred sub-claims.
 - Tier 3 (C-class): 2/4 passing — `mtls-enforcement` (rustls in-memory harness), `real-runtime-determinism` (wasmtime WASM subset). Remaining 2 (`real-partition-recovery`, `tee-attestation`) are genuinely blocked on infrastructure unavailable in the filter's environment (netem/Jepsen and TPM/SGX/SEV).
 - Tier 4 (D-class): **3/3 passing** — `latency-sla` (criterion baselines), `survives-adversarial-execution` (meta-aggregate), `github-checks-integration` (fixture-replay contract test against GitHub's documented Checks API schema; live API integration is out-of-scope `/schedule`-able routine).
 

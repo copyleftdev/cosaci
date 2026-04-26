@@ -469,16 +469,34 @@ expel a runner.
 
 ### 6b. Diagnose
 
-> **PARTIAL — observability shipping in #47.** v0.3 only has
-> stdout logs; v0.4 adds Prometheus metrics + OTLP traces.
-> Until then:
+The coordinator and agent emit structured `tracing` events; the
+fmt subscriber writes them to stderr (so systemd captures them via
+`journalctl`). `RUST_LOG` controls verbosity per-target — turn it
+up on the affected pair:
 
 ```bash
+# Bump verbosity (re-launch under systemd by editing the unit's
+# Environment= line, or just relaunch by hand):
+RUST_LOG=coordinator=debug,cosaci_state=debug \
+  /usr/local/bin/coordinator --addr 0.0.0.0:7878 ... &
+
 # Coordinator side
-sudo journalctl -u cosaci-coordinator | grep "job 7"
+sudo journalctl -u cosaci-coordinator -f | grep "job_id=7"
 
 # Runner side
-sudo journalctl -u "cosaci-agent@5" | grep "job 7"
+sudo journalctl -u "cosaci-agent@5" -f | grep "job_id=7"
+```
+
+If the journal flag is on (`--journal /var/lib/cosaci/journal.ndjson`,
+issue #51), each per-job state transition is also a JSON line:
+
+```bash
+jq 'select(.JobSubmitted.job_id == 7
+       or .CommitteeSelected.job_id == 7
+       or .AttestationReceived.job_id == 7
+       or .Aggregated.job_id == 7
+       or .Anchored.job_id == 7)' \
+   /var/lib/cosaci/journal.ndjson
 ```
 
 Likely causes (most → least common):
@@ -510,9 +528,12 @@ For now (v0.3), the only mitigation is:
   committee membership per job; the new round avoids the
   problematic runner with high probability).
 
-> **DEFERRED — observability dashboard shipping in #47.** A
-> Grafana dashboard / OTLP trace view for stuck jobs lands with
-> #47.
+> **DEFERRED — Prometheus metrics + OTLP exporter (#47 follow-on).**
+> The tracing foundation landed — events, spans, `RUST_LOG`
+> filtering, structured fields. Still pending: a metrics
+> endpoint and an OTLP exporter so external Prometheus +
+> Grafana / Jaeger can consume them without `journalctl`
+> spelunking.
 
 ---
 
@@ -522,10 +543,13 @@ End-state: you've reviewed the disagreeing attestations for a
 flagged runner and decided whether to expel (revoke + remove from
 enrollment) or reinstate.
 
-> **DEFERRED — full procedure shipping in #35.** v0.3 has the
-> reputation-monotonicity primitive but no production slashing
-> ledger. Treat this section as a placeholder until the slashing
-> infrastructure lands.
+> **PARTIAL — slashing-faithfulness primitive landed (#35); the
+> production ledger + automatic revocation pipeline is still
+> follow-on.** The pure stake/reputation algebra (`StakeLedger`,
+> `slash_minority`, reputation monotonicity) is exercised by the
+> Hegel cards, so the math is trustworthy; what's missing is the
+> coordinator-side wiring that records `SlashEvent`s to durable
+> storage and triggers an automatic CRL update.
 
 The v0.3 manual workflow:
 
@@ -599,6 +623,6 @@ jobs/min per coordinator.
 |---|---|---|
 | 2 | `cosaci-admin` wire-protocol form (talks to running coord) | #53 (file-only landed) |
 | 2 | Runtime enrollment reload (no restart) | #45 follow-on |
-| 5 | Job-queue durability + mid-job replay | #51 |
-| 6 | Prometheus metrics + OTLP traces | #47 |
-| 7 | Slashing ledger + automatic revocation | #35 |
+| 5 | Job-queue durability + mid-job replay | #51 (NDJSON journal + replay landed; full mid-flight resume pending) |
+| 6 | Prometheus metrics + OTLP exporter | #47 (tracing foundation landed) |
+| 7 | Slashing ledger + automatic revocation | #35 (faithfulness primitive landed; production ledger + auto-revoke pending) |
