@@ -13,6 +13,7 @@ members = [
     "crates/cosaci-vrf",
     "crates/cosaci-wasm",
     "crates/cosaci-jobs",
+    "crates/cosaci-webhook",
     "bins/cosaci-admin",
     "bins/cosaci-coordinator",
     "bins/cosaci-agent",
@@ -88,6 +89,7 @@ many_single_char_names = "allow"
 chacha20poly1305 = "0.10.1"
 ciborium         = "0.2.2"
 ed25519-dalek    = "2.2.0"
+hmac             = "0.13.0"
 merlin           = "3.0.0"
 rcgen            = "0.14.7"
 rs_merkle        = "1.5.0"
@@ -107,6 +109,7 @@ rand_chacha      = "0.10.0"
 signal-hook      = "0.3.18"
 tempfile         = "3.21"
 time             = { version = "0.3", default-features = false, features = ["std"] }
+toml             = "1.1.2"
 tracing          = { version = "0.1.41", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "env-filter"] }
 
@@ -139,11 +142,13 @@ cosaci-protocol = { path = "crates/cosaci-protocol" }
 cosaci-vrf      = { path = "crates/cosaci-vrf" }
 cosaci-wasm     = { path = "crates/cosaci-wasm" }
 cosaci-jobs     = { path = "crates/cosaci-jobs" }
+cosaci-webhook  = { path = "crates/cosaci-webhook" }
 
 [dev-dependencies]
 ciborium    = { workspace = true }
 criterion   = { workspace = true }
 hegeltest   = { workspace = true }
+hmac        = { workspace = true }
 rand        = { workspace = true }
 rand_chacha = { workspace = true }
 serde_json  = { workspace = true }

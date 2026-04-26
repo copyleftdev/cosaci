@@ -30,3 +30,5 @@ pub use cosaci_vrf::vrf;
 /// Re-export of the typed pipeline DSL crate (issue #39).
 pub use cosaci_jobs as jobs;
 pub use cosaci_wasm::wasm_runtime;
+/// Re-export of the webhook ingest crate (issue #52).
+pub use cosaci_webhook as webhook;

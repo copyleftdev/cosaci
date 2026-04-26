@@ -1,0 +1,22 @@
+[package]
+name        = "cosaci-webhook"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI webhook ingest — GitHub/GitLab signature verification + .cosaci.toml parser. Pure layer below the HTTP listener (which lands as a follow-on)."
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "webhook", "github", "gitlab"]
+categories  = ["network-programming", "cryptography"]
+publish     = false
+
+[dependencies]
+hmac        = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+sha2        = { workspace = true }
+toml        = { workspace = true }
+
+[lints]
+workspace = true

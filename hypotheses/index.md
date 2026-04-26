@@ -13,7 +13,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-## Tier 0 — Core algebra (24 cards, all A)
+## Tier 0 — Core algebra (25 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
@@ -41,6 +41,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `source-fetch-determinism` | §6.2.1 | A | **passing** | `tests/source_fetch_determinism.rs` + `tests/source_fetch_integration.rs` | tempfile + git (#40) |
 | `submission-auth-gate` | §13 | A | **passing** | `tests/submission_auth_gate.rs` | tenant-rate-limit + ed25519-dalek + ciborium (#46) |
 | `concurrent-job-isolation` | §7.4 | A | **passing** | `tests/concurrent_job_isolation.rs` | quorum-math + merkle-log-append-only (#50, partial) |
+| `webhook-auth-gate` | §13.2 | A | **passing** | `tests/webhook_auth_gate.rs` | hmac 0.13 + toml 1.1 (#52, partial) |
 
 ## Tier 1 — Scale primitives (9 cards, all A)
 
@@ -86,9 +87,9 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-**Totals:** 33 A + 6 B-stat + 4 C + 3 D = **46 cards** · **44 passing**.
+**Totals:** 34 A + 6 B-stat + 4 C + 3 D = **47 cards** · **45 passing**.
 
-- All A and B-stat cards: **39/39 passing** with no deferred sub-claims.
+- All A and B-stat cards: **40/40 passing** with no deferred sub-claims.
 - Tier 3 (C-class): 2/4 passing — `mtls-enforcement` (rustls in-memory harness), `real-runtime-determinism` (wasmtime WASM subset). Remaining 2 (`real-partition-recovery`, `tee-attestation`) are genuinely blocked on infrastructure unavailable in the filter's environment (netem/Jepsen and TPM/SGX/SEV).
 - Tier 4 (D-class): **3/3 passing** — `latency-sla` (criterion baselines), `survives-adversarial-execution` (meta-aggregate), `github-checks-integration` (fixture-replay contract test against GitHub's documented Checks API schema; live API integration is out-of-scope `/schedule`-able routine).
 
