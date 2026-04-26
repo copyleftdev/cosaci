@@ -27,6 +27,7 @@ use cosaci_vrf::vrf::VrfKeypair;
 type ClientStream = StreamOwned<ClientConnection, TcpStream>;
 
 fn main() -> std::io::Result<()> {
+    init_tracing();
     install_crypto_provider();
 
     let args: Vec<String> = env::args().collect();
@@ -55,7 +56,7 @@ fn main() -> std::io::Result<()> {
         client_config_from_paths(&ca_path, &cert_path, &key_path)
             .map_err(|e| std::io::Error::other(format!("client config: {e}")))?;
 
-    println!("[agent {id}] connecting to {addr} (mTLS)");
+    tracing::info!("[agent {id}] connecting to {addr} (mTLS)");
     let tcp = TcpStream::connect(&addr)?;
     tcp.set_nodelay(true)?;
     let server_name: ServerName<'static> = ServerName::try_from(server_name_str.clone())
@@ -89,9 +90,9 @@ fn main() -> std::io::Result<()> {
         },
     )?;
     match read_envelope(&mut stream)? {
-        Envelope::RegisterAck => println!("[agent {id}] registered (mTLS ✓, VRF ✓)"),
+        Envelope::RegisterAck => tracing::info!("[agent {id}] registered (mTLS ✓, VRF ✓)"),
         other => {
-            eprintln!("[agent {id}] expected RegisterAck, got {other:?}");
+            tracing::warn!("[agent {id}] expected RegisterAck, got {other:?}");
             return Ok(());
         }
     }
@@ -101,7 +102,7 @@ fn main() -> std::io::Result<()> {
         let env = match read_envelope(&mut stream) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("[agent {id}] stream closed: {e}");
+                tracing::warn!("[agent {id}] stream closed: {e}");
                 break;
             }
         };
@@ -126,7 +127,7 @@ fn main() -> std::io::Result<()> {
                 requirements: _,
                 deadline_unix_ns,
             } => {
-                println!(
+                tracing::info!(
                     "[agent {id}] assigned job {job_id}: pipeline ({} step(s))",
                     pipeline.steps.len()
                 );
@@ -145,18 +146,33 @@ fn main() -> std::io::Result<()> {
                 };
                 att.sign_with(&signing);
                 write_envelope(&mut stream, &Envelope::SubmitAttestation(att))?;
-                println!("[agent {id}] attestation submitted");
+                tracing::info!("[agent {id}] attestation submitted");
             }
             Envelope::Shutdown => {
-                println!("[agent {id}] shutdown received");
+                tracing::info!("[agent {id}] shutdown received");
                 break;
             }
             other => {
-                eprintln!("[agent {id}] unexpected envelope: {other:?}");
+                tracing::warn!("[agent {id}] unexpected envelope: {other:?}");
             }
         }
     }
     Ok(())
+}
+
+/// Structured logging via `tracing-subscriber` (issue #47, partial).
+/// `RUST_LOG` controls verbosity (`RUST_LOG=agent=debug`); default
+/// is `info`. Writes to stderr so coord/demo log forwarding still
+/// captures it.
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let _ = fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(true)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn arg_or(args: &[String], flag: &str, default: &str) -> String {
