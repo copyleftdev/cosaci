@@ -12,6 +12,39 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Changed — tenant registry hot-reload (#46 follow-on)
+
+- SIGHUP now reloads `tenants.txt` in addition to the existing
+  cert / CRL reload. The auth-state mutex's `registry` field is
+  swapped in place; the per-tenant token-bucket `limiter` is
+  *deliberately preserved* — the buckets are runtime accounting
+  state, not configuration. Reloading them would zero an
+  in-flight bucket and let a tenant submit at 2× their cap
+  across the seam.
+- The admin wire-protocol's `AdminAddTenant` / `AdminRevokeTenant`
+  handlers now auto-reload the in-memory registry after a
+  successful file write — operators no longer need to send
+  SIGHUP after every `cosaci-admin tenants add/revoke`. The
+  coord's `tracing` line ends with `(in effect now (auth state
+  reloaded))` on success or `(next coord restart picks it up)`
+  if the auto-reload couldn't read the freshly-written file
+  (the most likely cause is a TOCTOU race the operator can
+  retry past).
+- `cosaci-admin tenants add/revoke` print `in effect immediately`
+  on success now; the previous "next restart" caveat is removed
+  for the tenants path.
+- The coord's startup ordering changed slightly: `auth_state` is
+  now constructed *before* `install_sighup_reloader` so the
+  reloader can hold the `Arc<Mutex<AuthState>>`. No external
+  behavior change.
+- **Caveat: agent enrollment is still next-restart.** The
+  enrollment file is consulted only at fleet-assembly time
+  (`accept_fleet`), so SIGHUP-reloading it would have no
+  runtime effect — the fleet is locked in once accepted. v0.3
+  documents this trade-off; mid-run fleet expansion is a
+  follow-on that touches the fleet model itself, not the
+  registry plumbing.
+
 ### Added — admin wire-protocol (tenants) (#46 + #53 follow-on)
 
 - Five new envelope variants in `cosaci-protocol::proto`:

@@ -282,6 +282,30 @@ fn main() -> std::io::Result<()> {
     let draining = Arc::new(AtomicBool::new(false));
     install_signal_handlers(draining.clone())?;
 
+    // Tenant registry + rate limiter (issue #46). Empty path =
+    // disabled (legacy unauthenticated submission path). Non-empty:
+    // load registry, set up a per-tenant token-bucket limiter, and
+    // gate every stdin submission through `verify_and_admit`.
+    // Constructed up-front so the SIGHUP reloader (next stanza) can
+    // hold an `Arc<Mutex<AuthState>>` and hot-reload the registry
+    // without restarting the coord — closes the "next-restart"
+    // caveat on `cosaci-admin tenants add/revoke`.
+    let auth_state: Option<Arc<Mutex<AuthState>>> = if tenants_path.is_empty() {
+        None
+    } else {
+        let registry = TenantRegistry::load_from_path(&tenants_path)?;
+        tracing::info!(
+            "[coordinator] auth gate enabled ({} tenant(s) loaded from {})",
+            registry.len(),
+            tenants_path
+        );
+        // Default bucket params here are placeholders — every
+        // `verify_and_admit` call passes per-tenant capacity +
+        // refill via `accept_with_config`.
+        let limiter = RateLimiter::new(SystemClock, 0, 0);
+        Some(Arc::new(Mutex::new(AuthState { registry, limiter })))
+    };
+
     // Initial server config; will be hot-swappable via SIGHUP.
     let initial_cfg = build_server_config(&ca_path, &cert_path, &key_path, &crl_path)?;
     let shared_cfg: SharedServerConfig = Arc::new(Mutex::new(initial_cfg));
@@ -291,6 +315,8 @@ fn main() -> std::io::Result<()> {
         cert_path.clone(),
         key_path.clone(),
         crl_path.clone(),
+        auth_state.clone(),
+        tenants_path.clone(),
     )?;
 
     tracing::info!("[coordinator] listening on {addr} (mTLS)");
@@ -379,30 +405,11 @@ fn main() -> std::io::Result<()> {
             Arc::new(admin_keys),
             enrollment_path.clone(),
             tenants_path.clone(),
+            auth_state.clone(),
             log.clone(),
         )?;
         tracing::info!("[coordinator] admin listener on {admin_addr} (mTLS + signed AdminHello)");
     }
-
-    // Tenant registry + rate limiter (issue #46). Empty path =
-    // disabled (legacy unauthenticated submission path). Non-empty:
-    // load registry, set up a per-tenant token-bucket limiter, and
-    // gate every stdin submission through `verify_and_admit`.
-    let auth_state: Option<Arc<Mutex<AuthState>>> = if tenants_path.is_empty() {
-        None
-    } else {
-        let registry = TenantRegistry::load_from_path(&tenants_path)?;
-        tracing::info!(
-            "[coordinator] auth gate enabled ({} tenant(s) loaded from {})",
-            registry.len(),
-            tenants_path
-        );
-        // Default bucket params here are placeholders — every
-        // `verify_and_admit` call passes per-tenant capacity +
-        // refill via `accept_with_config`.
-        let limiter = RateLimiter::new(SystemClock, 0, 0);
-        Some(Arc::new(Mutex::new(AuthState { registry, limiter })))
-    };
 
     // Stdin submission queue (issue #32). Only initialized when
     // `--submit-stdin` was given. The reader thread closes the
@@ -1190,6 +1197,8 @@ fn install_sighup_reloader(
     cert_path: String,
     key_path: String,
     crl_path: String,
+    auth_state: Option<Arc<Mutex<AuthState>>>,
+    tenants_path: String,
 ) -> std::io::Result<()> {
     use signal_hook::consts::SIGHUP;
     use signal_hook::iterator::Signals;
@@ -1197,6 +1206,7 @@ fn install_sighup_reloader(
     let mut signals = Signals::new([SIGHUP])?;
     thread::spawn(move || {
         for _sig in signals.forever() {
+            // 1. Cert + CRL reload (existing behavior).
             match build_server_config(&ca_path, &cert_path, &key_path, &crl_path) {
                 Ok(new_cfg) => {
                     *shared_cfg.lock().expect("shared cfg poisoned") = new_cfg;
@@ -1211,8 +1221,33 @@ fn install_sighup_reloader(
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "[coordinator] SIGHUP: reload failed ({e}); keeping previous config"
+                        "[coordinator] SIGHUP: server config reload failed ({e}); keeping previous"
                     );
+                }
+            }
+
+            // 2. Tenant registry reload (issue #46 follow-on).
+            // Replace the registry inside the auth state's mutex
+            // *without* touching the rate limiter — the
+            // limiter's per-tenant token buckets are runtime
+            // accounting state, not configuration. Reloading
+            // them would zero an in-flight bucket and let a
+            // tenant submit at 2× their cap across the seam.
+            if let (Some(state), false) = (auth_state.as_ref(), tenants_path.is_empty()) {
+                match TenantRegistry::load_from_path(&tenants_path) {
+                    Ok(new_reg) => {
+                        let mut g = state.lock().expect("auth state poisoned");
+                        let n = new_reg.len();
+                        g.registry = new_reg;
+                        tracing::warn!(
+                            "[coordinator] SIGHUP: tenant registry reloaded ({n} tenant(s) from {tenants_path})"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[coordinator] SIGHUP: tenant registry reload failed ({e}); keeping previous"
+                        );
+                    }
                 }
             }
         }
@@ -1406,6 +1441,7 @@ fn spawn_admin_server(
     admin_keys: Arc<AdminKeySet>,
     enrollment_path: String,
     tenants_path: String,
+    auth_state: Option<Arc<Mutex<AuthState>>>,
     log: Arc<Mutex<LogBackend>>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(&addr)?;
@@ -1431,6 +1467,7 @@ fn spawn_admin_server(
             let admin_keys = admin_keys.clone();
             let enrollment_path = enrollment_path.clone();
             let tenants_path = tenants_path.clone();
+            let auth_state = auth_state.clone();
             let log = log.clone();
             thread::spawn(move || {
                 handle_admin_client(
@@ -1439,6 +1476,7 @@ fn spawn_admin_server(
                     &admin_keys,
                     &enrollment_path,
                     &tenants_path,
+                    auth_state.as_deref().map(|m| m as &Mutex<AuthState>),
                     &log,
                 );
             });
@@ -1453,6 +1491,7 @@ fn handle_admin_client(
     admin_keys: &AdminKeySet,
     enrollment_path: &str,
     tenants_path: &str,
+    auth_state: Option<&Mutex<AuthState>>,
     log: &Arc<Mutex<LogBackend>>,
 ) {
     let hello = match read_envelope(&mut stream) {
@@ -1591,6 +1630,7 @@ fn handle_admin_client(
             peer,
             admin_id,
             tenants_path,
+            auth_state,
             tenant_id,
             signing_fp,
             rate_capacity,
@@ -1598,7 +1638,7 @@ fn handle_admin_client(
             registered_at_unix_ns,
         ),
         Envelope::AdminRevokeTenant { tenant_id } => {
-            admin_revoke_tenant(peer, admin_id, tenants_path, tenant_id)
+            admin_revoke_tenant(peer, admin_id, tenants_path, auth_state, tenant_id)
         }
         other => {
             tracing::warn!(
@@ -1764,6 +1804,7 @@ fn admin_add_tenant(
     peer: std::net::SocketAddr,
     admin_id: u64,
     tenants_path: &str,
+    auth_state: Option<&Mutex<AuthState>>,
     tenant_id: u64,
     signing_fp: [u8; 32],
     rate_capacity: u64,
@@ -1800,8 +1841,10 @@ fn admin_add_tenant(
             reason: format!("write tenants: {e}"),
         };
     }
+    let reloaded = reload_tenants_in_state(tenants_path, auth_state);
     tracing::info!(
-        "[coordinator/admin] {peer}: admin_id={admin_id} added tenant_id={tenant_id} (next restart picks it up)"
+        "[coordinator/admin] {peer}: admin_id={admin_id} added tenant_id={tenant_id} ({})",
+        reload_status_phrase(reloaded)
     );
     Envelope::AdminAddTenantAck
 }
@@ -1810,6 +1853,7 @@ fn admin_revoke_tenant(
     peer: std::net::SocketAddr,
     admin_id: u64,
     tenants_path: &str,
+    auth_state: Option<&Mutex<AuthState>>,
     tenant_id: u64,
 ) -> Envelope {
     if tenants_path.is_empty() {
@@ -1855,10 +1899,45 @@ fn admin_revoke_tenant(
             reason: format!("write tenants: {e}"),
         };
     }
+    let reloaded = reload_tenants_in_state(tenants_path, auth_state);
     tracing::info!(
-        "[coordinator/admin] {peer}: admin_id={admin_id} revoked tenant_id={tenant_id} (next restart drops it)"
+        "[coordinator/admin] {peer}: admin_id={admin_id} revoked tenant_id={tenant_id} ({})",
+        reload_status_phrase(reloaded)
     );
     Envelope::AdminRevokeTenantAck
+}
+
+/// Reload `auth_state.registry` from `tenants_path`, preserving
+/// the `limiter` (its per-tenant token buckets are runtime
+/// accounting state, not configuration). Returns `true` on
+/// success, `false` if `auth_state` is `None` or the reload
+/// failed — the caller's tracing line uses the result to
+/// distinguish "in effect now" from "next coord restart".
+fn reload_tenants_in_state(tenants_path: &str, auth_state: Option<&Mutex<AuthState>>) -> bool {
+    let Some(state) = auth_state else {
+        return false;
+    };
+    match TenantRegistry::load_from_path(tenants_path) {
+        Ok(new_reg) => {
+            let mut g = state.lock().expect("auth state poisoned");
+            g.registry = new_reg;
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[coordinator/admin] post-mutation reload failed ({e}); next SIGHUP / restart will pick it up"
+            );
+            false
+        }
+    }
+}
+
+fn reload_status_phrase(reloaded: bool) -> &'static str {
+    if reloaded {
+        "in effect now (auth state reloaded)"
+    } else {
+        "next coord restart picks it up"
+    }
 }
 
 /// Atomic append: read existing → append `line\n` → write
