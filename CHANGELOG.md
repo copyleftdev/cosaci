@@ -12,6 +12,50 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — job submission CLI (#32, partial)
+
+- Coordinator gains `--submit-stdin` (read NDJSON job submissions
+  from stdin) and `--queue-cap N` (bounded submission queue,
+  default 64). Empty / absent stdin flag preserves the legacy
+  canned-`add`/`mul` rotation, so existing demos and integration
+  tests keep working unchanged.
+- Wire shape (v0.3 MVP): one JSON object per line —
+  `{"kind":"add"|"mul","a":<i32>,"b":<i32>,"deadline_secs":<u32>?}`.
+  Blank lines and `#`-prefixed comments are skipped; malformed
+  records are logged and dropped without aborting the stream.
+  `kind` dispatches to a canned WASM module — the format is
+  forward-compatible for arbitrary module bytes once #40
+  (deterministic source-fetching) lands.
+- Bounded `sync_channel` between a stdin-reader daemon thread and
+  the main job loop. **Backpressure policy: reject on full**
+  (documented in RUNBOOK §1e). The reader uses `try_send`; on
+  overflow it logs `submission queue full, dropping record …` and
+  continues. Producers retry or back off; the coordinator never
+  blocks on its stdin.
+- Clean shutdown semantics: closing stdin (EOF) drops the sender,
+  `recv_timeout` returns `Disconnected` once the queue drains,
+  and the loop exits 0. SIGTERM still drains unconditionally
+  regardless of stdin state — the two paths are independent.
+- `demo_networked` gains a third pass `RoundKind::SubmitStdin`:
+  spawns coord with `--submit-stdin`, pipes
+  `{"kind":"add","a":1,"b":2}` and `{"kind":"mul","a":3,"b":5}`,
+  closes stdin, asserts coord exits 0. The CI smoke step
+  greps for `kind=Add a=1 b=2`, `kind=Mul a=3 b=5`, and
+  `stdin closed and queue drained` so a regression that
+  silently ignored the submission can't pass.
+- New deps in `bins/cosaci-coordinator`: `serde` (workspace),
+  `serde_json` (workspace).
+- RUNBOOK §1e (Submitting jobs) added: wire shape, backpressure
+  semantics, shutdown semantics, and an explicit Out-of-scope
+  block listing the Unix-socket/REST alternative (also follow-on),
+  per-tenant signed tokens (#46), and arbitrary module bytes
+  (#40).
+- **Out of scope (follow-on):** Unix-socket and REST alternatives
+  to stdin so an external producer can submit without owning
+  coord's stdin handle; arbitrary module bytes (depends on #40);
+  per-submission priority ordering; per-tenant signed submission
+  tokens (depends on #46).
+
 ### Changed — docs / audit-trail follow-ups
 
 - `hypotheses/index.md` re-synced with disk: Tier 0 row count

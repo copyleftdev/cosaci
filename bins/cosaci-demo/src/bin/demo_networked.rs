@@ -12,7 +12,7 @@
 //! Run: `cargo run --bin demo_networked`.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -26,6 +26,7 @@ use cosaci_vrf::vrf::VrfKeypair;
 const ADDR_BOUNDED: &str = "127.0.0.1:7879";
 const ADDR_SIGTERM: &str = "127.0.0.1:7880";
 const READ_ADDR_BOUNDED: &str = "127.0.0.1:7881";
+const ADDR_SUBMIT_STDIN: &str = "127.0.0.1:7882";
 const FLEET: u64 = 5;
 const COMMITTEE: usize = 3;
 const MAX_JOBS_BOUNDED: u64 = 3;
@@ -94,8 +95,24 @@ fn main() {
     println!("\n[launcher] pass 2 coord exit: {exit2:?}");
     assert_eq!(exit2, Some(0), "SIGTERMed coord should drain and exit 0");
 
+    // ── Pass 3: stdin submission (issue #32) ──────────────────────────────
+    println!("\n───── pass 3: stdin NDJSON submission ─────");
+    let exit3 = run_round(
+        &coord_bin,
+        &agent_bin,
+        &certs,
+        ADDR_SUBMIT_STDIN,
+        RoundKind::SubmitStdin,
+    );
+    println!("\n[launcher] pass 3 coord exit: {exit3:?}");
+    assert_eq!(
+        exit3,
+        Some(0),
+        "stdin-submission coord should drain and exit 0"
+    );
+
     println!("\n═══════════════════════════════════════════════════════════");
-    println!(" Done. Both rounds completed cleanly.");
+    println!(" Done. All three rounds completed cleanly.");
     println!("═══════════════════════════════════════════════════════════");
 
     let _ = std::fs::remove_dir_all(&certs.temp_dir);
@@ -110,6 +127,10 @@ enum RoundKind {
         read_addr: Option<&'static str>,
     },
     Sigterm,
+    /// Stdin NDJSON submission (issue #32): the launcher pipes a
+    /// short script of `JobSubmission` records to coord's stdin,
+    /// then closes stdin. Coord drains the queue and exits.
+    SubmitStdin,
 }
 
 fn run_round(
@@ -150,9 +171,20 @@ fn run_round(
         coord_args.push("--journal".into());
         coord_args.push(journal_path.to_string_lossy().into_owned());
     }
+    if matches!(kind, RoundKind::SubmitStdin) {
+        coord_args.push("--submit-stdin".into());
+        coord_args.push("--queue-cap".into());
+        coord_args.push("8".into());
+    }
 
+    let stdin_setting = if matches!(kind, RoundKind::SubmitStdin) {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     let mut coord = Command::new(coord_bin)
         .args(&coord_args)
+        .stdin(stdin_setting)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -257,6 +289,37 @@ fn run_round(
                 .args(["-TERM", &coord_pid.to_string()])
                 .status();
             eprintln!("[launcher] sent SIGTERM to coord pid {coord_pid}: {status:?}");
+        });
+    }
+
+    if matches!(kind, RoundKind::SubmitStdin) {
+        // Pipe two NDJSON job submissions to coord's stdin. The
+        // first is `add(1, 2)`, the second `mul(3, 5)` — distinct
+        // (kind, a, b) tuples so a regression that ignored the
+        // submission and re-used the canned --a/--b would produce
+        // wrong artifact_hashes and the quorum lines would mismatch.
+        // Closing stdin (drop the handle) is the shutdown signal
+        // — coord's main loop notices `Disconnected` after the
+        // queue drains.
+        let mut stdin = coord.stdin.take().expect("coord stdin piped");
+        thread::spawn(move || {
+            // Wait briefly so coord's tracing line for the fleet
+            // assembly comes out before our submissions — keeps
+            // the smoke output readable.
+            thread::sleep(Duration::from_millis(500));
+            for line in [
+                r#"{"kind":"add","a":1,"b":2}"#,
+                r#"{"kind":"mul","a":3,"b":5}"#,
+            ] {
+                if let Err(e) = writeln!(stdin, "{line}") {
+                    eprintln!("[launcher] stdin write error: {e}");
+                    return;
+                }
+            }
+            // Drop closes coord stdin → reader thread EOFs →
+            // sender drops → main loop's recv returns Disconnected.
+            drop(stdin);
+            eprintln!("[launcher] stdin closed; coord should drain");
         });
     }
 

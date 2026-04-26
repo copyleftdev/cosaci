@@ -85,19 +85,26 @@ jobs:
           cargo build -p cosaci-demo        --bin demo_networked
           cargo build -p cosaci-demo        --bin verify
 
-      # End-to-end smoke test: networked demo runs two passes (bounded +
-      # SIGTERM drain). Allow extra time for the SIGTERM round.
+      # End-to-end smoke test: networked demo runs three passes
+      # (bounded, SIGTERM drain, stdin NDJSON submission). Allow
+      # extra time for the SIGTERM round + stdin pass.
       - name: Run networked demo
         run: |
           set -euo pipefail
-          OUT=$(timeout 60 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
+          OUT=$(timeout 90 cargo run --quiet -p cosaci-demo --bin demo_networked 2>&1)
           printf '%s\n' "$OUT"
           # Here-strings — avoids the SIGPIPE-on-`echo|grep -q` race that
           # `set -e` + `pipefail` treats as fatal in GitHub Actions.
           grep -q "outcome Pass"             <<<"$OUT"
           grep -q "anchored at position"     <<<"$OUT"
           grep -q "draining (signal received)" <<<"$OUT"
-          grep -q "Both rounds completed cleanly" <<<"$OUT"
+          # Pass 3 (issue #32): stdin submissions are dispatched with
+          # the (kind, a, b) the launcher piped in, and coord drains
+          # cleanly when stdin closes.
+          grep -q "kind=Add a=1 b=2"         <<<"$OUT"
+          grep -q "kind=Mul a=3 b=5"         <<<"$OUT"
+          grep -q "stdin closed and queue drained" <<<"$OUT"
+          grep -q "All three rounds completed cleanly" <<<"$OUT"
 
   # Audit gate (issue #10): hard fail on advisories / unapproved
   # licenses / unknown sources / wildcards. Policy lives in deny.toml

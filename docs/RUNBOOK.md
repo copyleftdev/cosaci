@@ -120,6 +120,54 @@ sudo journalctl -u cosaci-coordinator | grep "outcome Pass"
 # as COSACI_READ_ADDR=0.0.0.0:7879 if you want external auditors.)
 ```
 
+### 1e. Submitting jobs (issue #32)
+
+The coordinator accepts NDJSON job submissions on stdin when
+started with `--submit-stdin`. One JSON object per line; blank
+lines and `#`-prefixed comments are skipped.
+
+```bash
+# Wire shape (v0.3):
+#   { "kind": "add" | "mul",   # which canned WASM module to dispatch
+#     "a":    <i32>,
+#     "b":    <i32>,
+#     "deadline_secs": <u32>   # optional, default 60 }
+#
+# In v0.3 the executor only supports two canned modules — the wire
+# shape is forward-compatible for the source-fetching step (#40),
+# which will let `kind` carry a content-addressed module reference.
+
+cat <<'EOF' | /usr/local/bin/coordinator \
+    --addr 0.0.0.0:7878 \
+    --ca /etc/cosaci/ca.pem \
+    --cert /etc/cosaci/server.pem \
+    --key  /etc/cosaci/server.key.pem \
+    --enrollment /etc/cosaci/enrollment.txt \
+    --submit-stdin \
+    --queue-cap 64
+{"kind":"add","a":1,"b":2}
+{"kind":"mul","a":3,"b":5}
+EOF
+```
+
+**Backpressure.** The submission queue is bounded (`--queue-cap N`,
+default 64). On overflow the reader logs `submission queue full,
+dropping record …` and continues — submissions are *rejected,
+not blocked*, so a slow CI workload can't deadlock the coordinator.
+Producers must retry on drop or back off.
+
+**Shutdown.** Closing stdin (EOF) is the clean shutdown signal:
+the queue drains, the loop exits, agents are sent `Shutdown`, and
+the coord exits 0. SIGTERM still works as the unconditional
+drain-and-exit signal regardless of stdin state.
+
+> **Out of scope for v0.3 (follow-on).** A Unix-socket / REST
+> alternative to stdin (so an external producer can submit
+> without owning coord's stdin handle), per-tenant signed
+> submission tokens (issue #46), and arbitrary module bytes on
+> the wire (issue #40). The stdin path is the smallest interface
+> that proves the queue + loop are correct end-to-end.
+
 ---
 
 ## 2. Adding a runner
