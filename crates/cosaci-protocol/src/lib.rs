@@ -11,3 +11,4 @@
 pub mod proto;
 pub mod proto_async;
 pub mod tls;
+pub mod tls_async;

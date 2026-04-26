@@ -12,6 +12,51 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — async TLS helpers (#50 follow-on, PR 2 of N)
+
+Second foundation piece for the tokio rewrite of the
+coordinator. Pairs the new async wire primitives (PR 1, #99)
+with `tokio-rustls` so the eventual async coord can wrap an
+mTLS connection in `tokio_rustls::TlsAcceptor` /
+`TlsConnector` and feed it directly into
+`proto_async::{read_envelope_async, write_envelope_async}`.
+
+- New `cosaci_protocol::tls_async` module:
+  - `acceptor_from_paths(ca, cert, key, optional_crl)
+    -> std::io::Result<TlsAcceptor>` — server-side. Reuses
+    the existing sync `server_config_from_paths_with_crl`
+    so the same operator-supplied cert/key/CRL paths work
+    unchanged.
+  - `connector_from_paths(ca, cert, key)
+    -> std::io::Result<TlsConnector>` — client-side, mirror
+    of `client_config_from_paths`.
+  Both call `install_crypto_provider()` for the caller —
+  matching the convention of the sync builders.
+- New per-crate integration test
+  `crates/cosaci-protocol/tests/tls_async_handshake.rs`:
+  end-to-end server↔client mTLS handshake over real
+  `tokio::net::TcpStream` pair, then a full envelope
+  round-trip (`AdminListAgents` request → `AdminWelcome`
+  response). Uses the `TestCa` harness to generate the CA
+  + certs at test time. The test passing means the eventual
+  coord rewrite has every primitive it needs to talk to
+  agents over TLS without changing the wire.
+- New deps: `tempfile` (workspace) added to
+  `cosaci-protocol`'s dev-dependencies for the cert tempdir
+  in the test. No new runtime deps in this PR.
+- **Out of scope (next PR — the big one).** Coord-side
+  async rewrite: convert `bins/cosaci-coordinator` to
+  `tokio::main`, replace `std::net::TcpListener` with
+  `tokio::net::TcpListener`, replace blocking
+  `read_envelope`/`write_envelope` with their async
+  counterparts, switch `Mutex<...>` shared state to
+  `tokio::sync::Mutex` (or remove via per-task ownership),
+  honor `--max-concurrent-jobs` via a `Semaphore`-bounded
+  task pool, bump the demo from 3 sequential jobs to a
+  16-job burst, add a criterion concurrent-jobs throughput
+  bench. That PR is destabilizing enough that it warrants
+  a checkpoint with the user before kickoff.
+
 ### Added — async wire-protocol primitives (#50 follow-on, PR 1 of N)
 
 Groundwork for the `tokio` runtime rewrite of the coordinator
