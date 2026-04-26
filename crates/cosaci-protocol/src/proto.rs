@@ -187,6 +187,37 @@ pub enum Envelope {
         /// Number of entries in the log.
         length: u64,
     },
+    /// Admin → Coordinator: enroll a new agent. The coord rewrites
+    /// `enrollment.txt` atomically (tempfile + rename). Takes effect
+    /// on next coord restart — running fleet membership is fixed at
+    /// startup and isn't perturbed mid-run. For immediate revocation
+    /// of a misbehaving runner, use the CRL path (RUNBOOK §4).
+    AdminEnrollAgent {
+        /// Operator-chosen runner id. Must not already be enrolled —
+        /// the coord rejects duplicates rather than silently
+        /// overwriting (revoke first if you mean to replace).
+        runner_id: u64,
+        /// SHA-256 fingerprint of the runner's signing pubkey.
+        signing_fp: [u8; 32],
+        /// SHA-256 fingerprint of the runner's VRF pubkey.
+        vrf_fp: [u8; 32],
+        /// Operator-supplied wall-clock timestamp at enrollment, ns.
+        enrolled_at_unix_ns: i64,
+        /// Initial reputation, encoded as `(reputation * 1000).round()`
+        /// (0..=1000 maps to 0.0..=1.0).
+        initial_reputation_thousandths: u32,
+    },
+    /// Coordinator's accept response to [`Envelope::AdminEnrollAgent`].
+    AdminEnrollAck,
+    /// Admin → Coordinator: remove an enrolled agent by runner_id.
+    /// Same atomic-rewrite semantics as `AdminEnrollAgent`. Takes
+    /// effect on next coord restart.
+    AdminRevokeAgent {
+        /// Runner id to remove.
+        runner_id: u64,
+    },
+    /// Coordinator's accept response to [`Envelope::AdminRevokeAgent`].
+    AdminRevokeAck,
 }
 
 /// Wire shape of one admin-list-agents record. Mirrors the

@@ -78,10 +78,17 @@ FILESYSTEM-MODE SUBCOMMANDS (operate on local files):
     agents revoke   --enrollment <path> --runner-id <u64>
     log root        --log <path>
 
-WIRE-MODE SUBCOMMANDS (talk to a running coord; read-only in v0.3):
+WIRE-MODE SUBCOMMANDS (talk to a running coord; mutations take
+effect on next coord restart):
     agents list     --coord <addr> --ca <ca.pem> --cert <admin.pem>
                     --key <admin.key.pem> --admin-key <seed-file>
                     [--server-name <name>]
+    agents enroll   --coord <addr> ... (same auth flags)
+                    --runner-id <u64>
+                    --signing-fp <hex64> --vrf-fp <hex64>
+                    [--reputation <0.0..=1.0>] [--at <unix_ns>]
+    agents revoke   --coord <addr> ... (same auth flags)
+                    --runner-id <u64>
     log root        --coord <addr> ...   (same auth flags)
 
 EXAMPLES:
@@ -207,7 +214,6 @@ fn agents_list_wire(args: &[String], addr: &str) -> Result<(), String> {
 }
 
 fn agents_enroll(args: &[String]) -> Result<(), String> {
-    let path = required_flag(args, "--enrollment")?;
     let runner_id: u64 = required_flag(args, "--runner-id")?
         .parse()
         .map_err(|e| format!("--runner-id: {e}"))?;
@@ -230,6 +236,19 @@ fn agents_enroll(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("--at: {e}"))?
         .unwrap_or_else(now_unix_ns);
 
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return agents_enroll_wire(
+            args,
+            &addr,
+            runner_id,
+            signing_fp,
+            vrf_fp,
+            enrolled_at_unix_ns,
+            reputation,
+        );
+    }
+
+    let path = required_flag(args, "--enrollment")?;
     // Refuse if the runner_id is already enrolled. Operators who
     // mean to replace must `revoke` first; this catches typos.
     let existing = if Path::new(&path).exists() {
@@ -259,11 +278,46 @@ fn agents_enroll(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn agents_enroll_wire(
+    args: &[String],
+    addr: &str,
+    runner_id: u64,
+    signing_fp: [u8; 32],
+    vrf_fp: [u8; 32],
+    enrolled_at_unix_ns: i64,
+    reputation: f32,
+) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
+    let initial_reputation_thousandths = (reputation * 1000.0).round().clamp(0.0, 1000.0) as u32;
+    match conn.request(Envelope::AdminEnrollAgent {
+        runner_id,
+        signing_fp,
+        vrf_fp,
+        enrolled_at_unix_ns,
+        initial_reputation_thousandths,
+    })? {
+        Envelope::AdminEnrollAck => {
+            println!(
+                "enrolled runner {runner_id} on coord at {addr} (signing_fp[..8]={}, vrf_fp[..8]={})",
+                &fingerprint_hex(&signing_fp)[..16],
+                &fingerprint_hex(&vrf_fp)[..16],
+            );
+            println!("note: takes effect on next coord restart");
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
 fn agents_revoke(args: &[String]) -> Result<(), String> {
-    let path = required_flag(args, "--enrollment")?;
     let runner_id: u64 = required_flag(args, "--runner-id")?
         .parse()
         .map_err(|e| format!("--runner-id: {e}"))?;
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return agents_revoke_wire(args, &addr, runner_id);
+    }
+    let path = required_flag(args, "--enrollment")?;
     if !Path::new(&path).exists() {
         return Err(format!("{path} does not exist; nothing to revoke"));
     }
@@ -297,6 +351,21 @@ fn agents_revoke(args: &[String]) -> Result<(), String> {
     write_atomic(&path, &out).map_err(|e| format!("write {path}: {e}"))?;
     println!("revoked runner {runner_id} from {path}");
     Ok(())
+}
+
+fn agents_revoke_wire(args: &[String], addr: &str, runner_id: u64) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
+    match conn.request(Envelope::AdminRevokeAgent { runner_id })? {
+        Envelope::AdminRevokeAck => {
+            println!("revoked runner {runner_id} on coord at {addr}");
+            println!(
+                "note: takes effect on next coord restart; use the CRL path (RUNBOOK §4) for immediate revocation"
+            );
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
