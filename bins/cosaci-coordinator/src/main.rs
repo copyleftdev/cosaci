@@ -1548,6 +1548,25 @@ fn handle_admin_client(
                 length: log_g.len(),
             }
         }
+        Envelope::AdminEnrollAgent {
+            runner_id,
+            signing_fp,
+            vrf_fp,
+            enrolled_at_unix_ns,
+            initial_reputation_thousandths,
+        } => admin_enroll_agent(
+            peer,
+            admin_id,
+            enrollment_path,
+            runner_id,
+            signing_fp,
+            vrf_fp,
+            enrolled_at_unix_ns,
+            initial_reputation_thousandths,
+        ),
+        Envelope::AdminRevokeAgent { runner_id } => {
+            admin_revoke_agent(peer, admin_id, enrollment_path, runner_id)
+        }
         other => {
             tracing::warn!(
                 "[coordinator/admin] {peer}: admin_id={admin_id} unexpected envelope after hello: {other:?}"
@@ -1560,6 +1579,147 @@ fn handle_admin_client(
     if let Err(e) = write_envelope(&mut stream, &resp) {
         tracing::warn!("[coordinator/admin] {peer}: response write failed: {e}");
     }
+}
+
+/// Append a new enrollment record to `enrollment_path` atomically
+/// (read existing → append → tempfile + rename). Refuses on
+/// duplicate `runner_id`. Note the same caveat as the file-only
+/// admin CLI: takes effect on next coord restart, not mid-run.
+fn admin_enroll_agent(
+    peer: std::net::SocketAddr,
+    admin_id: u64,
+    enrollment_path: &str,
+    runner_id: RunnerId,
+    signing_fp: [u8; 32],
+    vrf_fp: [u8; 32],
+    enrolled_at_unix_ns: i64,
+    initial_reputation_thousandths: u32,
+) -> Envelope {
+    let existing = match EnrollmentSet::load_from_path(enrollment_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} enroll load failed: {e}"
+            );
+            return Envelope::AdminError {
+                reason: format!("load enrollment: {e}"),
+            };
+        }
+    };
+    if existing.get(runner_id).is_some() {
+        tracing::warn!(
+            "[coordinator/admin] {peer}: admin_id={admin_id} enroll runner_id={runner_id} rejected — already enrolled"
+        );
+        return Envelope::AdminError {
+            reason: format!("runner_id {runner_id} already enrolled"),
+        };
+    }
+    let reputation = (initial_reputation_thousandths.min(1000) as f32) / 1000.0;
+    let line = format!(
+        "{runner_id} {} {} {enrolled_at_unix_ns} {reputation}",
+        fingerprint_hex(&signing_fp),
+        fingerprint_hex(&vrf_fp),
+    );
+    if let Err(e) = append_atomic(enrollment_path, &line) {
+        tracing::warn!("[coordinator/admin] {peer}: admin_id={admin_id} enroll write failed: {e}");
+        return Envelope::AdminError {
+            reason: format!("write enrollment: {e}"),
+        };
+    }
+    tracing::info!(
+        "[coordinator/admin] {peer}: admin_id={admin_id} enrolled runner_id={runner_id} (next restart picks it up)"
+    );
+    Envelope::AdminEnrollAck
+}
+
+/// Remove an enrollment record by `runner_id`. Pass-through-and-skip
+/// over the source file (preserving comments and untouched lines),
+/// then atomic write. Refuses if the runner_id isn't present.
+fn admin_revoke_agent(
+    peer: std::net::SocketAddr,
+    admin_id: u64,
+    enrollment_path: &str,
+    runner_id: RunnerId,
+) -> Envelope {
+    let original = match std::fs::read_to_string(enrollment_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} revoke read failed: {e}"
+            );
+            return Envelope::AdminError {
+                reason: format!("read enrollment: {e}"),
+            };
+        }
+    };
+    let mut found = false;
+    let mut out = String::with_capacity(original.len());
+    for line in original.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let id_str = trimmed.split_whitespace().next().unwrap_or("");
+        match id_str.parse::<RunnerId>() {
+            Ok(id) if id == runner_id => {
+                found = true;
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    if !found {
+        tracing::warn!(
+            "[coordinator/admin] {peer}: admin_id={admin_id} revoke runner_id={runner_id} rejected — not enrolled"
+        );
+        return Envelope::AdminError {
+            reason: format!("runner_id {runner_id} not enrolled"),
+        };
+    }
+    if let Err(e) = write_atomic(enrollment_path, &out) {
+        tracing::warn!("[coordinator/admin] {peer}: admin_id={admin_id} revoke write failed: {e}");
+        return Envelope::AdminError {
+            reason: format!("write enrollment: {e}"),
+        };
+    }
+    tracing::info!(
+        "[coordinator/admin] {peer}: admin_id={admin_id} revoked runner_id={runner_id} (next restart drops it; CRL is the immediate path)"
+    );
+    Envelope::AdminRevokeAck
+}
+
+/// Atomic append: read existing → append `line\n` → write
+/// (tempfile + rename). Mirrors the `cosaci-admin` CLI's helper
+/// of the same name; duplicated rather than re-exported because
+/// the CLI is a separate bin and the duplication is small.
+fn append_atomic(path: &str, line: &str) -> std::io::Result<()> {
+    let existing = if std::path::Path::new(path).exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    let mut new_content = existing;
+    if !new_content.is_empty() && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    new_content.push_str(line);
+    new_content.push('\n');
+    write_atomic(path, &new_content)
+}
+
+fn write_atomic(path: &str, content: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let tmp = format!("{path}.tmp.coord.{}", std::process::id());
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Wall-clock `Clock` impl for the admin handler. The

@@ -12,6 +12,42 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — admin wire-protocol (mutating ops) (#53 follow-on)
+
+- Two new envelope variants in `cosaci-protocol::proto`:
+  `AdminEnrollAgent { runner_id, signing_fp, vrf_fp,
+  enrolled_at_unix_ns, initial_reputation_thousandths }`
+  with `AdminEnrollAck`; `AdminRevokeAgent { runner_id }`
+  with `AdminRevokeAck`. Same one-shot session shape as the
+  read-only ops shipped in #93 — the auth gate is unchanged.
+- Coordinator handles both via atomic file rewrite of the
+  enrollment file (read existing → mutate → tempfile +
+  rename, identical to the file-only `cosaci-admin` CLI).
+  Duplicate `runner_id` on enroll → `AdminError`; missing
+  `runner_id` on revoke → `AdminError`. Each mutation logs
+  `admin_id=N` against the operation in `tracing` so the
+  coord's stderr is the audit trail.
+- `cosaci-admin` CLI gains `--coord <addr>` mode for both
+  `agents enroll` and `agents revoke`, mirroring the read-
+  only path from #93. Same auth flags (`--ca / --cert /
+  --key / --admin-key [--server-name]`).
+- **Mid-run semantics.** Mutations take effect on next
+  coord restart. Running fleet membership is fixed at
+  `accept_fleet` time and isn't perturbed mid-run; the
+  coord's response prints a reminder to that effect, and
+  for immediate revocation of a misbehaving runner the
+  RUNBOOK §4 CRL path is the right tool. Documented in the
+  `Envelope::AdminEnrollAgent` doc comment, the
+  `--coord`-mode admin CLI output, and this CHANGELOG.
+- USAGE help in `cosaci-admin --help` updated with the
+  three wire-mode mutating subcommands.
+- **Out of scope (follow-on PR).** Hot-reload of the
+  enrollment set in the running coord (would let mutations
+  take effect mid-run without restart). Tenant-side admin
+  ops (`tenants add/list/revoke` over the wire). Both are
+  natural follow-ons that don't depend on a primitive
+  that hasn't shipped.
+
 ### Added — admin wire-protocol (read-only) (#53 follow-on)
 
 - New `cosaci-state::admin_auth` module: `AdminRecord`,
