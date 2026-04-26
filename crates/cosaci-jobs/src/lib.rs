@@ -28,8 +28,12 @@
 //!   `git`; falls back to `StepStatus::Failed` if `git` isn't on
 //!   `PATH`). Tree hashing is the deterministic core under
 //!   `hypotheses/source-fetch-determinism.md`.
-//! - [`Step::ExecNative`] — types defined; executor + sandbox lands in
-//!   issues #43 (resource limits) + #54 (egress policy).
+//! - [`Step::ExecNative`] — plain executor implemented (issue #107
+//!   PR 1 of N). Walltime enforcement + bounded captures + spawn-
+//!   failure determinism. **No sandbox yet**: cgroups v2 cpu/memory
+//!   land in #107 PR 2, mount-namespace + read-only rootfs in PR 3,
+//!   egress enforcement in PR 4. See
+//!   `hypotheses/exec-native-determinism.md`.
 //! - [`Step::CaptureLog`] / [`Step::CaptureArtifact`] — types defined;
 //!   executors land alongside `ExecNative`.
 //!
@@ -41,7 +45,10 @@
 //! once the executor lands without re-breaking the protocol.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -94,7 +101,9 @@ pub enum Step {
         limits: Limits,
     },
     /// Execute a native command with a fixed argv + environment.
-    /// Executor lands in issue #43 (resource limits) + #54 (egress).
+    /// Plain executor: issue #107 PR 1 of N. Sandbox layers
+    /// (cgroups v2, mount namespace, egress enforcement) land in
+    /// subsequent #107 PRs.
     ExecNative {
         /// Command + arguments. `command[0]` is the executable.
         command: Vec<String>,
@@ -299,7 +308,11 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
             Step::SourceFetch { url, reference } => {
                 execute_source_fetch_step(step_index, url, reference, step)
             }
-            Step::ExecNative { .. } => not_implemented(step_index, step, StepKind::ExecNative),
+            Step::ExecNative {
+                command,
+                env,
+                limits,
+            } => execute_native_step(step_index, command, env, limits, step),
             Step::CaptureLog { .. } => not_implemented(step_index, step, StepKind::CaptureLog),
             Step::CaptureArtifact { .. } => {
                 not_implemented(step_index, step, StepKind::CaptureArtifact)
@@ -406,6 +419,225 @@ fn execute_wasm_step(
                 output_hash: hash_canonical(&(step, which)),
             })
         }
+    }
+}
+
+/// Cap on captured stdout/stderr per step. Native processes that
+/// emit more than this are truncated (the first
+/// `MAX_CAPTURE_BYTES` are hashed; the remainder is drained from
+/// the pipe but not retained, so the child doesn't block).
+/// Matches `MAX_ENVELOPE_BYTES_PUB`'s 16 MiB shape — the next
+/// hop is the wire envelope, so capping here avoids a second
+/// truncation downstream.
+const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
+
+/// How often the wall-timeout watchdog polls `try_wait`. 50ms
+/// bounds the lateness of a kill at ~50ms past `wall_seconds`,
+/// which is well below any realistic step-level deadline.
+const WALL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Execute one `Step::ExecNative`.
+///
+/// **Plain executor — no sandbox** (issue #107 PR 1 of N). The
+/// child runs as the parent's UID/GID with whatever capabilities
+/// the parent has. cgroups limits, mount namespaces, and egress
+/// enforcement land in subsequent PRs (#107 PR 2/3/4).
+///
+/// What this PR enforces:
+///
+/// - **wall_seconds** — a watchdog polls `try_wait` every
+///   [`WALL_POLL_INTERVAL`]; if the child is still running after
+///   `wall_seconds`, it gets `kill()` and the step terminates as
+///   `LimitExceeded { Wall }`.
+/// - **Bounded captures** — stdout and stderr are read by
+///   per-pipe threads up to [`MAX_CAPTURE_BYTES`]; bytes past the
+///   cap are drained without retention so the child doesn't
+///   block on pipe back-pressure.
+/// - **Deterministic hash** — the `output_hash` binds (step
+///   bytes, status, exit_code, stdout SHA-256, stderr SHA-256).
+///   Two runners that execute the same command with the same
+///   environment and observe the same exit + bytes produce the
+///   same hash. Walltime and PID are not in the hash.
+///
+/// What this PR does **not** enforce:
+///
+/// - cpu_seconds / memory_mb — both ignored. Setting them is
+///   currently a no-op; cgroups v2 wiring lands in #107 PR 2.
+/// - Filesystem isolation — the child sees the parent's full
+///   filesystem.
+/// - Environment leakage — `env_clear()` runs first, so the
+///   child only sees the explicit `env` map. PATH is not
+///   inherited; the caller must include it if the executable
+///   isn't an absolute path.
+fn execute_native_step(
+    step_index: u32,
+    command: &[String],
+    env: &BTreeMap<String, String>,
+    limits: &Limits,
+    step: &Step,
+) -> StepOutput {
+    if command.is_empty() {
+        let detail = format!("native step {step_index}: empty command");
+        tracing_workaround_warn(&detail);
+        return StepOutput {
+            step_index,
+            status: StepStatus::Failed,
+            output_hash: hash_canonical(&(step, "empty_command")),
+        };
+    }
+
+    let mut cmd = Command::new(&command[0]);
+    cmd.args(&command[1..]);
+    cmd.env_clear();
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let detail = format!("native step {step_index}: spawn failed: {e}");
+            tracing_workaround_warn(&detail);
+            // Spawn-failure hash binds (step, e.kind()) so
+            // identical "command not found" failures hash equally
+            // across runners but distinct from a successful run.
+            let kind_id = e.kind() as i32;
+            return StepOutput {
+                step_index,
+                status: StepStatus::Failed,
+                output_hash: hash_canonical(&(step, "spawn_failed", kind_id)),
+            };
+        }
+    };
+
+    let stdout_pipe = child.stdout.take().expect("stdout piped");
+    let stderr_pipe = child.stderr.take().expect("stderr piped");
+    let stdout_thread = thread::spawn(move || read_capped(stdout_pipe, MAX_CAPTURE_BYTES));
+    let stderr_thread = thread::spawn(move || read_capped(stderr_pipe, MAX_CAPTURE_BYTES));
+
+    let exit_status = if limits.wall_seconds == 0 {
+        child.wait().ok()
+    } else {
+        wait_with_wall_timeout(
+            &mut child,
+            Duration::from_secs(u64::from(limits.wall_seconds)),
+        )
+    };
+
+    match exit_status {
+        Some(status) => {
+            // Clean exit — wait for reader threads to drain. Since
+            // the child's pipes close on exit, both reads EOF
+            // promptly.
+            let stdout = stdout_thread.join().unwrap_or_default();
+            let stderr = stderr_thread.join().unwrap_or_default();
+            let stdout_hash: [u8; 32] = Sha256::digest(&stdout).into();
+            let stderr_hash: [u8; 32] = Sha256::digest(&stderr).into();
+            if status.success() {
+                StepOutput {
+                    step_index,
+                    status: StepStatus::Success,
+                    output_hash: hash_canonical(&(
+                        step,
+                        "ok",
+                        status.code().unwrap_or(0),
+                        stdout_hash,
+                        stderr_hash,
+                    )),
+                }
+            } else {
+                let code = status.code().unwrap_or(-1);
+                StepOutput {
+                    step_index,
+                    status: StepStatus::Failed,
+                    output_hash: hash_canonical(&(
+                        step,
+                        "exit_nonzero",
+                        code,
+                        stdout_hash,
+                        stderr_hash,
+                    )),
+                }
+            }
+        }
+        None => {
+            // Walltime exceeded; child was killed. We do NOT
+            // `join` the reader threads here. Rationale: if the
+            // killed child had spawned its own children (e.g.
+            // `sh -c 'sleep 5'` reparents `sleep` to init), those
+            // children inherit our stdout/stderr pipes and the
+            // pipe-read won't EOF until they exit. Joining would
+            // block past `wall_seconds`. The output_hash for the
+            // `LimitExceeded { Wall }` case binds only
+            // (step, LimitKind::Wall) — captured bytes are
+            // intentionally not part of the hash, so dropping
+            // them here keeps determinism intact. The detached
+            // reader threads finish when the reparented children
+            // close their pipe ends, after which they exit
+            // cleanly. PR 4 (cgroups + namespaces) replaces this
+            // with a cgroup-kill of the whole process tree.
+            drop(stdout_thread);
+            drop(stderr_thread);
+            StepOutput {
+                step_index,
+                status: StepStatus::LimitExceeded {
+                    which: LimitKind::Wall,
+                },
+                output_hash: hash_canonical(&(step, LimitKind::Wall)),
+            }
+        }
+    }
+}
+
+/// Read up to `cap` bytes from `pipe`; drain the rest without
+/// retaining so the child doesn't block on pipe back-pressure.
+/// Returns the captured prefix.
+fn read_capped<R: Read>(mut pipe: R, cap: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cap.min(64 * 1024));
+    let mut scratch = [0_u8; 8192];
+    let mut total = 0_usize;
+    loop {
+        match pipe.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(n) => {
+                if total < cap {
+                    let take = (cap - total).min(n);
+                    out.extend_from_slice(&scratch[..take]);
+                }
+                total = total.saturating_add(n);
+            }
+            Err(_) => break,
+        }
+    }
+    out
+}
+
+/// Wait for `child` up to `timeout`. Returns
+/// `Some(ExitStatus)` if the child finished in time, `None`
+/// if the child was killed for exceeding the deadline.
+fn wait_with_wall_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if start.elapsed() >= timeout {
+            // Best-effort kill + reap. If kill fails (race —
+            // child already exited), one more `try_wait` picks
+            // up the status next iteration of the caller.
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(WALL_POLL_INTERVAL);
     }
 }
 

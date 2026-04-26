@@ -5,8 +5,6 @@
 //! whole trust chain — if two runners can disagree on a `PipelineResult`
 //! for the same `Pipeline`, every downstream property collapses.
 
-use std::collections::BTreeMap;
-
 use cosaci::jobs::{
     Limits, Pipeline, PipelineResult, Step, StepStatus, canonical_encoding, execute_pipeline,
 };
@@ -161,25 +159,21 @@ fn output_changing_mutation_propagates(tc: TestCase) {
 // itself. This lets a partially-implemented coordinator produce
 // consistent attestations without aborting the pipeline.
 //
-// The original encoding of this test used `Step::SourceFetch` since
-// that was a NotImplemented variant in v0.3-pre-#40. With #40 landed,
-// SourceFetch now executes (or fails with `git not found` /
-// `clone failed`); the NotImplemented surface is now `Step::ExecNative`
-// (lands in #43 + #54 follow-ons).
+// The NotImplemented surface has rotated through several variants as
+// executors land: SourceFetch (pre-#40), ExecNative (pre-#107), and
+// now CaptureLog / CaptureArtifact (pending #108). Each rotation
+// shrinks the unimplemented surface; the property under test is the
+// same.
 // ----------------------------------------------------------------------------
 #[hegel::test]
 fn not_implemented_steps_are_deterministic(tc: TestCase) {
-    let cmd_len = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
-    let argv: Vec<String> = (0..cmd_len)
-        .map(|i| format!("arg-{i}-{}", tc.draw(generators::integers::<u32>())))
-        .collect();
+    // Pull a random capture name; the bytes are part of the canonical
+    // hash, so distinct names produce distinct hashes deterministically.
+    let n: u32 = tc.draw(generators::integers::<u32>());
+    let name = format!("capture-{n}");
 
     let p = Pipeline {
-        steps: vec![Step::ExecNative {
-            command: argv.clone(),
-            env: BTreeMap::new(),
-            limits: Limits::default(),
-        }],
+        steps: vec![Step::CaptureLog { name: name.clone() }],
     };
 
     let r1 = execute_pipeline(&p).expect("first run");
