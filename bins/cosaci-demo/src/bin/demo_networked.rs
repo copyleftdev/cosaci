@@ -19,10 +19,14 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cosaci_core::signing::Keypair;
+use cosaci_jobs::{Limits, Pipeline, Step};
 use cosaci_protocol::tls::{SUBJECT_SERVER, TestCa, install_crypto_provider};
 use cosaci_state::enrollment::{fingerprint, fingerprint_hex};
-use cosaci_state::submission_auth::{JobSubmissionPayload, canonical_bytes};
+use cosaci_state::submission_auth::{
+    JobSubmissionPayload, PipelineSubmissionPayload, canonical_bytes, canonical_bytes_pipeline,
+};
 use cosaci_vrf::vrf::VrfKeypair;
+use cosaci_wasm::wasm_runtime::{canned_add_module, encode_args};
 
 /// Lowercase-hex-encode a byte slice. Used for pubkey + signature
 /// fields in the pass-3 NDJSON submission lines.
@@ -374,6 +378,43 @@ fn run_round(
                     eprintln!("[launcher] stdin write error: {e}");
                     return;
                 }
+            }
+            // Pipeline-shape submission (#106 PR 3 of N): a single-
+            // step ExecWasm pipeline carrying canned `add` with
+            // (10, 20). The wire shape is `pipeline_cbor_hex` (the
+            // ciborium encoding of `cosaci_jobs::Pipeline`); the
+            // signature commits to the canonical
+            // `PipelineSubmissionPayload` bytes. The coord decodes
+            // the CBOR and hands the Pipeline straight to
+            // `run_one_job`. End-to-end proof of the v0.5 lift.
+            let pipeline = Pipeline {
+                steps: vec![Step::ExecWasm {
+                    module: canned_add_module().expect("canned add module"),
+                    args_cbor: encode_args(10, 20).expect("encode args"),
+                    limits: Limits::default(),
+                }],
+            };
+            let mut pipeline_cbor = Vec::new();
+            ciborium::into_writer(&pipeline, &mut pipeline_cbor).expect("encode pipeline cbor");
+            let payload = PipelineSubmissionPayload {
+                tenant_id: DEMO_TENANT_ID,
+                pipeline_cbor: pipeline_cbor.clone(),
+                deadline_secs: 60,
+                nonce: 0xc3_u128,
+            };
+            let bytes = canonical_bytes_pipeline(&payload).expect("encode pipeline payload");
+            let sig = kp.sign(&bytes).to_bytes();
+            let line = format!(
+                r#"{{"pipeline_cbor_hex":"{pcbor}","deadline_secs":60,"tenant_id":{tenant_id},"nonce":{nonce},"pubkey_hex":"{pk_hex}","signature_hex":"{sig_hex}"}}"#,
+                pcbor = lower_hex(&pipeline_cbor),
+                tenant_id = DEMO_TENANT_ID,
+                nonce = 0xc3_u128,
+                pk_hex = lower_hex(&pk),
+                sig_hex = lower_hex(&sig),
+            );
+            if let Err(e) = writeln!(stdin, "{line}") {
+                eprintln!("[launcher] pipeline stdin write error: {e}");
+                return;
             }
             // Drop closes coord stdin → reader thread EOFs →
             // sender drops → main loop's recv returns Disconnected.

@@ -118,21 +118,39 @@ For every NDJSON line the coord reads:
   the coord `check_submission` dispatches by variant; pipeline
   submissions never get gated through the legacy
   `verify_and_admit` (and vice versa).
-- **Pipeline shape does not reach the run-loop queue** — until
-  #106 PR 3 lands the executor wiring, pipeline submissions
-  that pass the auth gate are logged-and-dropped at the reader,
-  not enqueued. The auth posture (rate-limit token spend +
-  replay nonce burn) is still production-ready, so an attacker
-  can't probe future-pipeline-execution by exploiting the
-  current gate.
+## End-to-end execution (#106 PR 3 of N)
+
+The coord reader now resolves both wire shapes into a unified
+`RunSubmission { pipeline, deadline_secs, origin }` that the
+run loop dequeues and hands directly to `run_one_job`. Legacy
+lines build a single-step ExecWasm pipeline at the reader;
+pipeline lines `ciborium`-decode `pipeline_cbor_hex` into a
+`cosaci_jobs::Pipeline`. CBOR-decode failures are dropped with
+a warn and do not enter the queue.
+
+`run_one_job`'s `log_module: &[u8]` parameter (a v0.3 vestige
+that was only used to print a hash prefix in the per-job log
+line) is dropped; the log line now reports
+`pipeline_hash=…`, derived from
+`cosaci_jobs::canonical_encoding(&pipeline)`. This is a
+no-op functionally — the agent-side `Envelope::Assign` already
+carried the full Pipeline (line 843 of `bins/cosaci-coordinator/
+src/main.rs`); only the coord-side log line and the run-loop
+dispatch change.
+
+### End-to-end falsifiable claim
+
+A pipeline-shape NDJSON line, signed under a registered
+tenant's key and gated through `verify_and_admit_pipeline`,
+flows all the way through committee selection → assignment →
+attestation aggregation → quorum verdict → Merkle anchor.
+Witnessed live in `bins/cosaci-demo/src/bin/demo_networked.rs`'s
+pass-3 stdin pipeline, with the `outcome Pass` log line on
+`shape=pipeline step(s)=1` jobs. The CI smoke test's
+`grep -q "shape=pipeline step(s)=1"` falsifies regression.
 
 ## Out of scope (follow-on)
 
-- Coord-side `Pipeline` **execution** wiring (decode CBOR →
-  `cosaci_jobs::Pipeline` → `run_one_job`). Tracked as #106
-  PR 3 of N and entangled with the executor refactor that
-  decouples `module: &Vec<u8>` from `run_one_job` (today's
-  signature is canned-WASM-shaped).
 - Per-step capability/resource enforcement at submission time.
   The current gate accepts any well-signed `pipeline_cbor`;
   step-level policy is enforced by the executor at run time
@@ -140,5 +158,6 @@ For every NDJSON line the coord reads:
 - Migration of existing v0.3 clients off the legacy
   `JobSubmissionPayload` shape — both shapes are accepted in
   parallel during the v0.4 → v0.5 transition.
-- Real-pipeline execution: tracked under #107 (ExecNative
-  cgroups sandbox) and #108 (CaptureLog + CaptureArtifact).
+- New step kinds beyond ExecWasm: tracked under #107
+  (ExecNative cgroups sandbox) and #108 (CaptureLog +
+  CaptureArtifact bundle).
