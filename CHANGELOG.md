@@ -12,6 +12,41 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — admin wire-protocol (tenants) (#46 + #53 follow-on)
+
+- Five new envelope variants in `cosaci-protocol::proto`:
+  `AdminListTenants` / `AdminTenantList { entries }`,
+  `AdminAddTenant { tenant_id, signing_fp, rate_capacity,
+  rate_refill_per_sec, registered_at_unix_ns }` /
+  `AdminAddTenantAck`, `AdminRevokeTenant { tenant_id }` /
+  `AdminRevokeTenantAck`. Plus the wire-shape struct
+  `AdminTenantRecord` mirroring `cosaci-state::tenant::TenantRecord`.
+- Coordinator handlers `admin_list_tenants` / `admin_add_tenant` /
+  `admin_revoke_tenant` thread `tenants_path` through the existing
+  admin-listener spawn site. Same atomic file-rewrite shape as the
+  agents-mutating ops in #94: read existing → mutate → tempfile +
+  rename. Duplicate `tenant_id` on add → `AdminError`; missing
+  `tenant_id` on revoke → `AdminError`. Each mutation logs
+  `admin_id=N` against the operation in `tracing`.
+- `cosaci-admin` CLI gains a `tenants` top-level subcommand with
+  three verbs (`list` / `add` / `revoke`), wire-mode only — file-
+  only tenants management isn't shipped because the operator-
+  facing CLI path didn't exist before this PR. Same auth flags
+  as the agents wire-mode (`--ca / --cert / --key / --admin-key
+  [--server-name]`).
+- USAGE help in `cosaci-admin --help` updated with the three
+  new tenants subcommands.
+- **Tenant rate quota plumbing.** `tenants add` carries
+  `--rate-capacity` and `--rate-refill-per-sec` on the wire; the
+  coord stores them in `tenants.txt` for the next-restart
+  rate-limiter (the running coord's per-tenant token buckets are
+  fixed at startup, same as the agent-enrollment caveat).
+- **Out of scope (follow-on PR).** Hot-reload of the tenant
+  registry mid-run. Per-tenant capacity/refill update without
+  revoke-then-readd. File-only `tenants` subcommand (mirror of
+  the agents file-only path) — the wire path is preferred but
+  the symmetric file-only operations are a small follow-on.
+
 ### Added — admin wire-protocol (mutating ops) (#53 follow-on)
 
 - Two new envelope variants in `cosaci-protocol::proto`:

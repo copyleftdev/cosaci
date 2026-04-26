@@ -218,6 +218,55 @@ pub enum Envelope {
     },
     /// Coordinator's accept response to [`Envelope::AdminRevokeAgent`].
     AdminRevokeAck,
+    /// Admin → Coordinator: list the entries in the tenant registry
+    /// the coord was started with.
+    AdminListTenants,
+    /// Coordinator's response to [`Envelope::AdminListTenants`].
+    AdminTenantList {
+        /// Records, sorted by `tenant_id`.
+        entries: Vec<AdminTenantRecord>,
+    },
+    /// Admin → Coordinator: add a tenant to `tenants.txt`. Atomic-
+    /// rewrite on the coord, takes effect on next restart (same
+    /// caveat as agents enroll).
+    AdminAddTenant {
+        /// Operator-chosen tenant id.
+        tenant_id: u64,
+        /// SHA-256 fingerprint of the tenant's signing pubkey.
+        signing_fp: [u8; 32],
+        /// Token-bucket capacity (peak burst, in tokens).
+        rate_capacity: u64,
+        /// Token-bucket refill rate (tokens per second).
+        rate_refill_per_sec: u64,
+        /// Wall-clock timestamp at registration, ns since epoch.
+        registered_at_unix_ns: u64,
+    },
+    /// Coordinator's accept response to [`Envelope::AdminAddTenant`].
+    AdminAddTenantAck,
+    /// Admin → Coordinator: remove a tenant by id.
+    AdminRevokeTenant {
+        /// Tenant id to remove.
+        tenant_id: u64,
+    },
+    /// Coordinator's accept response to [`Envelope::AdminRevokeTenant`].
+    AdminRevokeTenantAck,
+}
+
+/// Wire shape of one admin-list-tenants record. Mirrors the
+/// `cosaci-state::tenant::TenantRecord` fields the admin CLI
+/// renders.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminTenantRecord {
+    /// Tenant identifier.
+    pub tenant_id: u64,
+    /// SHA-256 fingerprint of the tenant's signing pubkey.
+    pub signing_fp: [u8; 32],
+    /// Token-bucket capacity.
+    pub rate_capacity: u64,
+    /// Token-bucket refill rate (per second).
+    pub rate_refill_per_sec: u64,
+    /// Wall-clock timestamp at registration, ns.
+    pub registered_at_unix_ns: u64,
 }
 
 /// Wire shape of one admin-list-agents record. Mirrors the
