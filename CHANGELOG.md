@@ -12,6 +12,33 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Changed — structured logging via tracing (#47, partial)
+
+- Coordinator and agent binaries now emit logs via `tracing` +
+  `tracing-subscriber::fmt` instead of bare `println!` /
+  `eprintln!`. Output goes to stderr; format includes
+  ISO-8601 timestamp, level, target, and message:
+  `2024-01-01T12:00:00.000Z  INFO coordinator: ...`.
+- `RUST_LOG` controls per-target verbosity
+  (`RUST_LOG=coordinator=debug`); default level is `info`.
+- New `init_tracing()` function in each binary calls
+  `tracing_subscriber::fmt().with_env_filter(...).try_init()`
+  early in `main`; the `try_init` swallows duplicate-init errors
+  so a child process or test harness can re-init without
+  panicking.
+- New workspace deps: `tracing` 0.1.41,
+  `tracing-subscriber` 0.3.19 (with `fmt` + `env-filter`
+  features only — no JSON output, no spans yet).
+- Smoke-test grep patterns are unchanged: tracing prepends a
+  level + target prefix but the message body is preserved, so
+  `grep -q "outcome Pass"` and friends still match.
+- **Out of scope (follow-on PR):** Prometheus metrics endpoint,
+  OTLP traces, span instrumentation around `run_one_job`, and
+  scrub-the-redundant-`[coordinator]`-prefix-from-messages now
+  that the target field provides it. Demo binaries (`demo`,
+  `demo_networked`, `verify`, `cosaci-admin`) keep `println!` —
+  those are user-facing CLIs, not daemons.
+
 ### Changed — journal integrated into coordinator (#51 follow-on)
 
 - Coordinator gains `--journal <path>` flag. Empty (default) =

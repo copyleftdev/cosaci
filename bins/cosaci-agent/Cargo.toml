@@ -15,9 +15,11 @@ publish     = false
 cosaci-core     = { path = "../../crates/cosaci-core" }
 cosaci-jobs     = { path = "../../crates/cosaci-jobs" }
 cosaci-protocol = { path = "../../crates/cosaci-protocol" }
-cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
-cosaci-wasm     = { path = "../../crates/cosaci-wasm" }
-rustls          = { workspace = true }
+cosaci-vrf         = { path = "../../crates/cosaci-vrf" }
+cosaci-wasm        = { path = "../../crates/cosaci-wasm" }
+rustls             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Short bin name to match demo_networked's subprocess launcher.
 [[bin]]

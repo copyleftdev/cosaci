@@ -57,6 +57,7 @@ struct RegisteredAgent {
 }
 
 fn main() -> std::io::Result<()> {
+    init_tracing();
     install_crypto_provider();
 
     let args: Vec<String> = env::args().collect();
@@ -122,7 +123,7 @@ fn main() -> std::io::Result<()> {
         None
     } else {
         let set = EnrollmentSet::load_from_path(&enrollment_path)?;
-        println!(
+        tracing::info!(
             "[coordinator] enrollment gate enabled ({} runner(s) loaded from {})",
             set.len(),
             enrollment_path
@@ -143,7 +144,7 @@ fn main() -> std::io::Result<()> {
         let pending_run = state.pending_re_run();
         let pending_anchor = state.pending_re_anchor();
         let anchored_count = state.anchored_jobs().len();
-        println!(
+        tracing::info!(
             "[coordinator] journal replayed from {}: {} entries, {} previously-anchored job(s), {} pending re-run, {} pending re-anchor",
             journal_path,
             entries.len(),
@@ -152,13 +153,13 @@ fn main() -> std::io::Result<()> {
             pending_anchor.len()
         );
         if !pending_run.is_empty() {
-            println!(
+            tracing::info!(
                 "[coordinator] journal pending re-run job_ids: {:?} (NOT auto-rerun in v0.3 — see #32 + #51 follow-on)",
                 pending_run
             );
         }
         if !pending_anchor.is_empty() {
-            println!(
+            tracing::info!(
                 "[coordinator] journal pending re-anchor job_ids: {:?} (NOT auto-anchored in v0.3 — operator triage)",
                 pending_anchor
             );
@@ -181,7 +182,7 @@ fn main() -> std::io::Result<()> {
         crl_path.clone(),
     )?;
 
-    println!("[coordinator] listening on {addr} (mTLS)");
+    tracing::info!("[coordinator] listening on {addr} (mTLS)");
     let listener = TcpListener::bind(&addr)?;
 
     // ── Phase 1: accept fleet + verify registration VRF proofs ─────────────
@@ -192,7 +193,7 @@ fn main() -> std::io::Result<()> {
     // so a slashed runner's voting weight shrinks immediately.
     let mut stake_ledger =
         StakeLedger::from_stake_map(agents.iter().map(|a| (a.runner_id, a.stake)).collect());
-    println!(
+    tracing::info!(
         "[coordinator] fleet assembled ({} agents, all VRF-attested, slash_fraction={})",
         agents.len(),
         slash_fraction
@@ -219,7 +220,7 @@ fn main() -> std::io::Result<()> {
         LogBackend::Mem(MerkleLog::new())
     } else {
         let file_log = MerkleLog::<FileStore>::open(&log_path)?;
-        println!(
+        tracing::info!(
             "[coordinator] Merkle log path: {log_path} ({} entries on disk)",
             file_log.len()
         );
@@ -237,7 +238,7 @@ fn main() -> std::io::Result<()> {
             records.clone(),
             log.clone(),
         )?;
-        println!("[coordinator] read API listening on {read_addr} (mTLS)");
+        tracing::info!("[coordinator] read API listening on {read_addr} (mTLS)");
     }
 
     let mut completed: u64 = 0;
@@ -275,23 +276,23 @@ fn main() -> std::io::Result<()> {
                 completed += 1;
             }
             Err(e) => {
-                eprintln!("[coordinator] job {job_id} aborted: {e}");
+                tracing::warn!("[coordinator] job {job_id} aborted: {e}");
                 completed += 1;
             }
         }
     }
 
     if draining.load(Ordering::Relaxed) {
-        println!("[coordinator] draining (signal received), shutting down agents");
+        tracing::info!("[coordinator] draining (signal received), shutting down agents");
     } else {
-        println!("[coordinator] reached max-jobs={max_jobs}, shutting down agents");
+        tracing::info!("[coordinator] reached max-jobs={max_jobs}, shutting down agents");
     }
 
     for a in agents.iter_mut() {
         let _ = write_envelope(&mut a.stream, &Envelope::Shutdown);
         let _ = a.stream.sock.shutdown(std::net::Shutdown::Both);
     }
-    println!("[coordinator] done — completed {completed} job(s)");
+    tracing::info!("[coordinator] done — completed {completed} job(s)");
     Ok(())
 }
 
@@ -315,7 +316,7 @@ fn accept_fleet(
         let conn = match ServerConnection::new(cfg_snapshot) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[coordinator] ServerConnection::new for {peer}: {e}");
+                tracing::warn!("[coordinator] ServerConnection::new for {peer}: {e}");
                 continue;
             }
         };
@@ -324,7 +325,7 @@ fn accept_fleet(
         let env = match read_envelope(&mut stream) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("[coordinator] handshake/read failed for {peer}: {e}");
+                tracing::warn!("[coordinator] handshake/read failed for {peer}: {e}");
                 continue;
             }
         };
@@ -338,7 +339,7 @@ fn accept_fleet(
             capabilities,
         } = env
         else {
-            eprintln!("[coordinator] dropping non-Register from {peer}");
+            tracing::warn!("[coordinator] dropping non-Register from {peer}");
             continue;
         };
 
@@ -350,7 +351,9 @@ fn accept_fleet(
             &vrf_output,
             &vrf_proof,
         ) {
-            eprintln!("[coordinator] dropping {peer}: registration VRF proof rejected ({e:?})");
+            tracing::warn!(
+                "[coordinator] dropping {peer}: registration VRF proof rejected ({e:?})"
+            );
             continue;
         }
 
@@ -362,7 +365,7 @@ fn accept_fleet(
             let signing_fp = fingerprint(&signing_pubkey);
             let vrf_fp = fingerprint(&vrf_pubkey);
             if !set.is_enrolled(runner_id, &signing_fp, &vrf_fp) {
-                eprintln!(
+                tracing::warn!(
                     "[coordinator] rejecting unenrolled agent runner_id={} from {} (signing_fp={}, vrf_fp={})",
                     runner_id,
                     peer,
@@ -376,17 +379,21 @@ fn accept_fleet(
         let signing_pk = match VerifyingKey::from_bytes(&signing_pubkey) {
             Ok(pk) => pk,
             Err(e) => {
-                eprintln!("[coordinator] bad signing pubkey from {peer}: {e}");
+                tracing::warn!("[coordinator] bad signing pubkey from {peer}: {e}");
                 continue;
             }
         };
         if let Err(e) = write_envelope(&mut stream, &Envelope::RegisterAck) {
-            eprintln!("[coordinator] ack write failed for {peer}: {e}");
+            tracing::warn!("[coordinator] ack write failed for {peer}: {e}");
             continue;
         }
-        println!(
+        tracing::info!(
             "[coordinator] registered runner {} from {} (stake {}, mTLS ✓, VRF ✓, platform={:?}, runtimes={:?})",
-            runner_id, peer, stake, capabilities.platform, capabilities.runtimes
+            runner_id,
+            peer,
+            stake,
+            capabilities.platform,
+            capabilities.runtimes
         );
         agents.push(RegisteredAgent {
             runner_id,
@@ -450,23 +457,27 @@ fn run_one_job(
             vrf_proof,
         } = env
         else {
-            eprintln!(
+            tracing::warn!(
                 "[coordinator] runner {} returned {:?}, expected VrfClaim",
-                ag.runner_id, env
+                ag.runner_id,
+                env
             );
             continue;
         };
         if claim_job_id != job_id {
-            eprintln!(
+            tracing::warn!(
                 "[coordinator] runner {} VrfClaim job_id mismatch ({} != {})",
-                ag.runner_id, claim_job_id, job_id
+                ag.runner_id,
+                claim_job_id,
+                job_id
             );
             continue;
         }
         if let Err(e) = vrf_verify(&ag.vrf_pk, &job_seed, &vrf_output, &vrf_proof) {
-            eprintln!(
+            tracing::warn!(
                 "[coordinator] runner {} VrfClaim proof rejected ({:?}); excluding from selection",
-                ag.runner_id, e
+                ag.runner_id,
+                e
             );
             continue;
         }
@@ -501,7 +512,7 @@ fn run_one_job(
             .iter()
             .filter(|c| cosaci_core::capabilities::matches(&c.capabilities, &requirements))
             .count();
-        eprintln!(
+        tracing::warn!(
             "[coordinator] job {job_id} ABORTED: only {eligible_count} of {} runner(s) match requirements ({:?} / {} cpu / {} MiB / runtimes {:?}); need {committee_size}",
             candidates.len(),
             requirements.platform,
@@ -511,7 +522,7 @@ fn run_one_job(
         );
         return Ok(());
     };
-    println!(
+    tracing::info!(
         "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes), pipeline ({} step(s))",
         &mh[..4],
         log_module.len(),
@@ -567,32 +578,36 @@ fn run_one_job(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                eprintln!(
+                tracing::warn!(
                     "[coordinator] job {} runner {} attestation timeout after {}s — recorded as missing",
-                    job_id, ag.runner_id, runner_timeout_secs
+                    job_id,
+                    ag.runner_id,
+                    runner_timeout_secs
                 );
                 missing.push(ag.runner_id);
                 continue;
             }
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "[coordinator] job {} runner {} attestation read failed ({e}) — recorded as missing",
-                    job_id, ag.runner_id
+                    job_id,
+                    ag.runner_id
                 );
                 missing.push(ag.runner_id);
                 continue;
             }
         };
         let Envelope::SubmitAttestation(att) = env else {
-            eprintln!(
+            tracing::warn!(
                 "[coordinator] runner {} returned {:?}, expected SubmitAttestation",
-                ag.runner_id, env
+                ag.runner_id,
+                env
             );
             missing.push(ag.runner_id);
             continue;
         };
         let sig_ok = att.verify_signature(&ag.signing_pk);
-        println!(
+        tracing::info!(
             "[coordinator] job {} runner {} attestation sig={} artifact={:02x?}…",
             job_id,
             ag.runner_id,
@@ -621,7 +636,7 @@ fn run_one_job(
         }
     }
     if !missing.is_empty() {
-        println!(
+        tracing::info!(
             "[coordinator] job {} missing attestations: {:?} ({} of {} committee)",
             job_id,
             missing,
@@ -657,9 +672,12 @@ fn run_one_job(
         .max_by_key(|&(_, c)| *c)
         .map(|(k, _)| *k)
         .unwrap_or([0_u8; 32]);
-    println!(
+    tracing::info!(
         "[coordinator] job {} outcome {:?} (threshold {}, committee stake {})",
-        job_id, outcome, threshold, committee_stake
+        job_id,
+        outcome,
+        threshold,
+        committee_stake
     );
 
     // Journal: Aggregated (issue #51). Records the outcome + the
@@ -682,9 +700,13 @@ fn run_one_job(
     if matches!(outcome, Outcome::Pass | Outcome::Fail) && slash_fraction > 0.0 {
         let events = stake_ledger.slash_minority(consensus_artifact, &attestations, slash_fraction);
         for event in &events {
-            println!(
+            tracing::info!(
                 "[coordinator] job {} slashed runner {} by {} ({} → {})",
-                job_id, event.runner_id, event.slashed, event.stake_before, event.stake_after
+                job_id,
+                event.runner_id,
+                event.slashed,
+                event.stake_before,
+                event.stake_after
             );
         }
     }
@@ -718,7 +740,7 @@ fn run_one_job(
             .expect("records mutex poisoned")
             .insert(job_id, record);
 
-        println!(
+        tracing::info!(
             "[coordinator] job {} anchored at position {} root {:02x?}…",
             job_id,
             pos,
@@ -785,7 +807,7 @@ fn install_sighup_reloader(
             match build_server_config(&ca_path, &cert_path, &key_path, &crl_path) {
                 Ok(new_cfg) => {
                     *shared_cfg.lock().expect("shared cfg poisoned") = new_cfg;
-                    eprintln!(
+                    tracing::warn!(
                         "[coordinator] SIGHUP: server config reloaded (cert={cert_path}, crl={})",
                         if crl_path.is_empty() {
                             "<none>"
@@ -795,7 +817,9 @@ fn install_sighup_reloader(
                     );
                 }
                 Err(e) => {
-                    eprintln!("[coordinator] SIGHUP: reload failed ({e}); keeping previous config");
+                    tracing::warn!(
+                        "[coordinator] SIGHUP: reload failed ({e}); keeping previous config"
+                    );
                 }
             }
         }
@@ -834,12 +858,12 @@ fn journal_append(journal: Option<&Arc<Mutex<Journal>>>, entry: &JournalEntry) {
     let mut guard = match j.lock() {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("[coordinator] journal mutex poisoned: {e}");
+            tracing::warn!("[coordinator] journal mutex poisoned: {e}");
             return;
         }
     };
     if let Err(e) = guard.append(entry) {
-        eprintln!("[coordinator] journal append failed ({e}) — continuing");
+        tracing::warn!("[coordinator] journal append failed ({e}) — continuing");
     }
 }
 
@@ -851,6 +875,28 @@ fn outcome_to_journal(o: Outcome) -> JournalOutcome {
         Outcome::Retry => JournalOutcome::Retry,
         Outcome::Escalate => JournalOutcome::Escalate,
     }
+}
+
+/// Initialize structured tracing (issue #47, partial).
+///
+/// `tracing-subscriber::fmt` writes pretty-printed lines to stderr.
+/// `RUST_LOG` controls per-target verbosity (`RUST_LOG=coordinator=debug`).
+/// Default level is `info`; the subscriber is permissive about
+/// duplicate-init (the `try_init` swallows the error so a child process
+/// or an embedded test harness can re-init without panicking).
+///
+/// Out of scope here: Prometheus metrics endpoint, OTLP traces. Both
+/// land alongside the coord-side observability HTTP path that #47
+/// follow-on work will wire in.
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let _ = fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(true)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn arg_or(args: &[String], flag: &str, default: &str) -> String {
@@ -939,7 +985,7 @@ fn spawn_read_server(
             let (tcp, peer) = match listener.accept() {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("[coordinator/read] accept error: {e}");
+                    tracing::warn!("[coordinator/read] accept error: {e}");
                     continue;
                 }
             };
@@ -948,7 +994,7 @@ fn spawn_read_server(
             let conn = match ServerConnection::new(cfg_snapshot) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[coordinator/read] ServerConnection::new for {peer}: {e}");
+                    tracing::warn!("[coordinator/read] ServerConnection::new for {peer}: {e}");
                     continue;
                 }
             };
@@ -970,7 +1016,7 @@ fn handle_read_client(
     let req = match read_envelope(&mut stream) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("[coordinator/read] {peer}: read failed: {e}");
+            tracing::warn!("[coordinator/read] {peer}: read failed: {e}");
             return;
         }
     };
@@ -991,11 +1037,11 @@ fn handle_read_client(
             }
         }
         other => {
-            eprintln!("[coordinator/read] {peer}: dropping non-read envelope {other:?}");
+            tracing::warn!("[coordinator/read] {peer}: dropping non-read envelope {other:?}");
             return;
         }
     };
     if let Err(e) = write_envelope(&mut stream, &resp) {
-        eprintln!("[coordinator/read] {peer}: write failed: {e}");
+        tracing::warn!("[coordinator/read] {peer}: write failed: {e}");
     }
 }
