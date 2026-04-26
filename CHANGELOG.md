@@ -12,6 +12,44 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — concurrent-job-isolation algebra (#50, partial)
+
+- New hypothesis card `hypotheses/concurrent-job-isolation.md`
+  (class A, Tier 0). The falsifiable core of issue #50: even
+  under arbitrary interleaving, every individual job's
+  `(Outcome, consensus_artifact_hash)` must equal what the
+  job would produce sequentially. The card documents the four
+  property statements (per-job determinism, log-multiset
+  equality, no mid-flight leakage, anchor-time stake snapshot)
+  + the explicit out-of-scope items.
+- New `tests/concurrent_job_isolation.rs`:
+  - A Hegel `state_machine` modeling a small concurrent
+    coordinator with `submit_job` / `aggregate_pending` /
+    `anchor_aggregated` rules. Hegel's scheduler interleaves
+    them across multiple in-flight jobs; the invariants
+    enforce per-job equivalence with a pre-computed oracle,
+    no duplicate anchors, and "anchored implies aggregated".
+  - A pointwise property `job_processing_order_does_not_change_outcomes`
+    that runs the same restatement of the claim without the
+    state-machine machinery — useful for shrinking and for
+    callers reading the file top-down.
+- Coordinator gains `--max-concurrent-jobs N` (default 1).
+  Today the loop is synchronous (effective concurrency = 1)
+  and the flag only logs a "concurrent runtime lands in
+  follow-on" notice when N > 1; the *algebra* this flag will
+  exploit is now verified by the hypothesis card. The flag
+  is forward-compatible plumbing so the runtime change can
+  land without re-touching the CLI surface.
+- **Out of scope (follow-on PRs).** All three runtime-side
+  acceptance criteria of #50 stay deferred: the `tokio`
+  rewrite (`async fn run_one_job`, `tokio::sync::Mutex`,
+  per-runner stream serialization, `futures::join_all` on
+  the VRF round); the networked demo bumping from 3
+  sequential jobs to a 16-job burst; and the criterion
+  concurrent-jobs throughput bench. The PR description for
+  the runtime change should quote before/after numbers from
+  that bench.
+
 ### Added — submission auth gate + per-tenant rate limit (#46, partial)
 
 - New `cosaci-state::tenant` module: `TenantRecord`,

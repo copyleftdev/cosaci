@@ -197,6 +197,17 @@ fn main() -> std::io::Result<()> {
     let queue_cap: usize = arg_or(&args, "--queue-cap", "64")
         .parse()
         .expect("queue-cap usize");
+    // `--max-concurrent-jobs <N>` (issue #50, partial): peak
+    // number of jobs the coord will have in-flight once the
+    // tokio-async runtime change lands. Today the loop is
+    // synchronous (effective concurrency = 1), so v0.3 logs
+    // the requested cap but processes one job at a time. The
+    // *algebra* under interleaving is already verified by
+    // `hypotheses/concurrent-job-isolation.md`; the flag is
+    // forward-compatible plumbing.
+    let max_concurrent_jobs: usize = arg_or(&args, "--max-concurrent-jobs", "1")
+        .parse()
+        .expect("max-concurrent-jobs usize");
     // `--tenants <path>` (issue #46): enable per-tenant signed
     // submissions. Empty (default) preserves the legacy unauthenticated
     // stdin path. Non-empty: load the tenant registry at startup,
@@ -283,6 +294,11 @@ fn main() -> std::io::Result<()> {
         agents.len(),
         slash_fraction
     );
+    if max_concurrent_jobs > 1 {
+        tracing::info!(
+            "[coordinator] max-concurrent-jobs={max_concurrent_jobs} requested; v0.3 loop is sequential — concurrent runtime lands in #50 follow-on"
+        );
+    }
 
     // Pre-compile both canned modules and alternate per job. Each job
     // ships a single-step `ExecWasm` pipeline; future job submissions
