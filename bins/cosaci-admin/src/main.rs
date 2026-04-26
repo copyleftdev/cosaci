@@ -90,6 +90,12 @@ effect on next coord restart):
     agents revoke   --coord <addr> ... (same auth flags)
                     --runner-id <u64>
     log root        --coord <addr> ...   (same auth flags)
+    tenants list    --coord <addr> ...
+    tenants add     --coord <addr> ... --tenant-id <u64>
+                    --signing-fp <hex64>
+                    --rate-capacity <u64> --rate-refill-per-sec <u64>
+                    [--at <unix_ns>]
+    tenants revoke  --coord <addr> ... --tenant-id <u64>
 
 EXAMPLES:
     # filesystem
@@ -115,6 +121,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("agents") => agents_cmd(&args[1..]),
+        Some("tenants") => tenants_cmd(&args[1..]),
         Some("log") => log_cmd(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
             print!("{USAGE}");
@@ -361,6 +368,114 @@ fn agents_revoke_wire(args: &[String], addr: &str, runner_id: u64) -> Result<(),
             println!(
                 "note: takes effect on next coord restart; use the CRL path (RUNBOOK §4) for immediate revocation"
             );
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// tenants <verb>  (issue #46 + #53 follow-on; wire mode only — file-only
+// tenants management isn't shipped because the operator-facing CLI
+// path for tenants didn't exist before this PR).
+// ────────────────────────────────────────────────────────────────────────
+
+fn tenants_cmd(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("list") => tenants_list(&args[1..]),
+        Some("add") => tenants_add(&args[1..]),
+        Some("revoke") => tenants_revoke(&args[1..]),
+        Some(other) => Err(format!(
+            "unknown tenants verb `{other}` (expected: list, add, revoke)"
+        )),
+        None => Err("tenants: missing verb (list, add, revoke)".to_string()),
+    }
+}
+
+fn tenants_list(args: &[String]) -> Result<(), String> {
+    let addr = required_flag(args, "--coord")?;
+    let conn = AdminWireConn::connect(args, &addr)?;
+    match conn.request(Envelope::AdminListTenants)? {
+        Envelope::AdminTenantList { mut entries } => {
+            if entries.is_empty() {
+                println!("(no tenants registered per coord at {addr})");
+                return Ok(());
+            }
+            println!(
+                "{:<10}  {:<16}  {:>10}  {:>14}  {:>22}",
+                "tenant_id", "signing_fp", "capacity", "refill_per_s", "registered_at"
+            );
+            entries.sort_by_key(|r| r.tenant_id);
+            for r in entries {
+                let s_short = &fingerprint_hex(&r.signing_fp)[..16];
+                println!(
+                    "{:<10}  {:<16}  {:>10}  {:>14}  {:>22}",
+                    r.tenant_id,
+                    s_short,
+                    r.rate_capacity,
+                    r.rate_refill_per_sec,
+                    r.registered_at_unix_ns
+                );
+            }
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn tenants_add(args: &[String]) -> Result<(), String> {
+    let addr = required_flag(args, "--coord")?;
+    let tenant_id: u64 = required_flag(args, "--tenant-id")?
+        .parse()
+        .map_err(|e| format!("--tenant-id: {e}"))?;
+    let signing_fp_hex = required_flag(args, "--signing-fp")?;
+    let signing_fp = parse_hex32(&signing_fp_hex).map_err(|e| format!("--signing-fp: {e}"))?;
+    let rate_capacity: u64 = required_flag(args, "--rate-capacity")?
+        .parse()
+        .map_err(|e| format!("--rate-capacity: {e}"))?;
+    let rate_refill_per_sec: u64 = required_flag(args, "--rate-refill-per-sec")?
+        .parse()
+        .map_err(|e| format!("--rate-refill-per-sec: {e}"))?;
+    let registered_at_unix_ns: u64 = optional_flag(args, "--at")
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|e| format!("--at: {e}"))?
+        .unwrap_or_else(|| now_unix_ns().max(0) as u64);
+
+    let conn = AdminWireConn::connect(args, &addr)?;
+    match conn.request(Envelope::AdminAddTenant {
+        tenant_id,
+        signing_fp,
+        rate_capacity,
+        rate_refill_per_sec,
+        registered_at_unix_ns,
+    })? {
+        Envelope::AdminAddTenantAck => {
+            println!(
+                "added tenant {tenant_id} on coord at {addr} (signing_fp[..8]={}, capacity={rate_capacity}, refill={rate_refill_per_sec}/s)",
+                &fingerprint_hex(&signing_fp)[..16],
+            );
+            println!("note: takes effect on next coord restart");
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn tenants_revoke(args: &[String]) -> Result<(), String> {
+    let addr = required_flag(args, "--coord")?;
+    let tenant_id: u64 = required_flag(args, "--tenant-id")?
+        .parse()
+        .map_err(|e| format!("--tenant-id: {e}"))?;
+    let conn = AdminWireConn::connect(args, &addr)?;
+    match conn.request(Envelope::AdminRevokeTenant { tenant_id })? {
+        Envelope::AdminRevokeTenantAck => {
+            println!("revoked tenant {tenant_id} on coord at {addr}");
+            println!("note: takes effect on next coord restart");
             Ok(())
         }
         Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),

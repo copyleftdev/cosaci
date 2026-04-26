@@ -36,7 +36,7 @@ use cosaci_core::quorum::{Outcome, RunnerId, Vote, VoteResult, Weight, aggregate
 use cosaci_core::retrieval::{JobRecord, build_bundle};
 use cosaci_core::signing::VerifyingKey;
 use cosaci_protocol::proto::{
-    ADMIN_HELLO_CHALLENGE, ADMIN_HELLO_FRESHNESS_NS, AdminAgentRecord, Envelope,
+    ADMIN_HELLO_CHALLENGE, ADMIN_HELLO_FRESHNESS_NS, AdminAgentRecord, AdminTenantRecord, Envelope,
     VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope,
 };
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
@@ -46,7 +46,9 @@ use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_s
 use cosaci_state::rate_limit::RateLimiter;
 use cosaci_state::stake_ledger::StakeLedger;
 use cosaci_state::submission_auth::{AuthCheck, JobSubmissionPayload, verify_and_admit};
-use cosaci_state::tenant::{TenantRegistry, parse_hex32};
+use cosaci_state::tenant::{
+    TenantRegistry, fingerprint_hex as tenant_fingerprint_hex, parse_hex32,
+};
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
@@ -376,6 +378,7 @@ fn main() -> std::io::Result<()> {
             shared_cfg.clone(),
             Arc::new(admin_keys),
             enrollment_path.clone(),
+            tenants_path.clone(),
             log.clone(),
         )?;
         tracing::info!("[coordinator] admin listener on {admin_addr} (mTLS + signed AdminHello)");
@@ -1402,6 +1405,7 @@ fn spawn_admin_server(
     shared_cfg: SharedServerConfig,
     admin_keys: Arc<AdminKeySet>,
     enrollment_path: String,
+    tenants_path: String,
     log: Arc<Mutex<LogBackend>>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(&addr)?;
@@ -1426,9 +1430,17 @@ fn spawn_admin_server(
             let stream = ServerStream::new(conn, tcp);
             let admin_keys = admin_keys.clone();
             let enrollment_path = enrollment_path.clone();
+            let tenants_path = tenants_path.clone();
             let log = log.clone();
             thread::spawn(move || {
-                handle_admin_client(stream, peer, &admin_keys, &enrollment_path, &log);
+                handle_admin_client(
+                    stream,
+                    peer,
+                    &admin_keys,
+                    &enrollment_path,
+                    &tenants_path,
+                    &log,
+                );
             });
         }
     });
@@ -1440,6 +1452,7 @@ fn handle_admin_client(
     peer: std::net::SocketAddr,
     admin_keys: &AdminKeySet,
     enrollment_path: &str,
+    tenants_path: &str,
     log: &Arc<Mutex<LogBackend>>,
 ) {
     let hello = match read_envelope(&mut stream) {
@@ -1567,6 +1580,26 @@ fn handle_admin_client(
         Envelope::AdminRevokeAgent { runner_id } => {
             admin_revoke_agent(peer, admin_id, enrollment_path, runner_id)
         }
+        Envelope::AdminListTenants => admin_list_tenants(peer, admin_id, tenants_path),
+        Envelope::AdminAddTenant {
+            tenant_id,
+            signing_fp,
+            rate_capacity,
+            rate_refill_per_sec,
+            registered_at_unix_ns,
+        } => admin_add_tenant(
+            peer,
+            admin_id,
+            tenants_path,
+            tenant_id,
+            signing_fp,
+            rate_capacity,
+            rate_refill_per_sec,
+            registered_at_unix_ns,
+        ),
+        Envelope::AdminRevokeTenant { tenant_id } => {
+            admin_revoke_tenant(peer, admin_id, tenants_path, tenant_id)
+        }
         other => {
             tracing::warn!(
                 "[coordinator/admin] {peer}: admin_id={admin_id} unexpected envelope after hello: {other:?}"
@@ -1690,6 +1723,142 @@ fn admin_revoke_agent(
         "[coordinator/admin] {peer}: admin_id={admin_id} revoked runner_id={runner_id} (next restart drops it; CRL is the immediate path)"
     );
     Envelope::AdminRevokeAck
+}
+
+fn admin_list_tenants(peer: std::net::SocketAddr, admin_id: u64, tenants_path: &str) -> Envelope {
+    if tenants_path.is_empty() {
+        return Envelope::AdminError {
+            reason: "tenants registry not configured (--tenants is empty)".to_string(),
+        };
+    }
+    match TenantRegistry::load_from_path(tenants_path) {
+        Ok(reg) => {
+            let entries: Vec<AdminTenantRecord> = reg
+                .iter()
+                .map(|r| AdminTenantRecord {
+                    tenant_id: r.tenant_id,
+                    signing_fp: r.signing_fp,
+                    rate_capacity: r.rate_capacity,
+                    rate_refill_per_sec: r.rate_refill_per_sec,
+                    registered_at_unix_ns: r.registered_at_unix_ns,
+                })
+                .collect();
+            tracing::info!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} tenants list ({} record(s))",
+                entries.len()
+            );
+            Envelope::AdminTenantList { entries }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[coordinator/admin] {peer}: admin_id={admin_id} tenants list failed: {e}"
+            );
+            Envelope::AdminError {
+                reason: format!("load tenants: {e}"),
+            }
+        }
+    }
+}
+
+fn admin_add_tenant(
+    peer: std::net::SocketAddr,
+    admin_id: u64,
+    tenants_path: &str,
+    tenant_id: u64,
+    signing_fp: [u8; 32],
+    rate_capacity: u64,
+    rate_refill_per_sec: u64,
+    registered_at_unix_ns: u64,
+) -> Envelope {
+    if tenants_path.is_empty() {
+        return Envelope::AdminError {
+            reason: "tenants registry not configured (--tenants is empty)".to_string(),
+        };
+    }
+    // Refuse on duplicate tenant_id, matching the agents-enroll
+    // shape. Operator must `revoke` first to replace.
+    let existing = match TenantRegistry::load_from_path(tenants_path) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => TenantRegistry::new(),
+        Err(e) => {
+            return Envelope::AdminError {
+                reason: format!("load tenants: {e}"),
+            };
+        }
+    };
+    if existing.get(tenant_id).is_some() {
+        return Envelope::AdminError {
+            reason: format!("tenant_id {tenant_id} already registered"),
+        };
+    }
+    let line = format!(
+        "{tenant_id} {} {rate_capacity} {rate_refill_per_sec} {registered_at_unix_ns}",
+        tenant_fingerprint_hex(&signing_fp),
+    );
+    if let Err(e) = append_atomic(tenants_path, &line) {
+        return Envelope::AdminError {
+            reason: format!("write tenants: {e}"),
+        };
+    }
+    tracing::info!(
+        "[coordinator/admin] {peer}: admin_id={admin_id} added tenant_id={tenant_id} (next restart picks it up)"
+    );
+    Envelope::AdminAddTenantAck
+}
+
+fn admin_revoke_tenant(
+    peer: std::net::SocketAddr,
+    admin_id: u64,
+    tenants_path: &str,
+    tenant_id: u64,
+) -> Envelope {
+    if tenants_path.is_empty() {
+        return Envelope::AdminError {
+            reason: "tenants registry not configured (--tenants is empty)".to_string(),
+        };
+    }
+    let original = match std::fs::read_to_string(tenants_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return Envelope::AdminError {
+                reason: format!("read tenants: {e}"),
+            };
+        }
+    };
+    let mut found = false;
+    let mut out = String::with_capacity(original.len());
+    for line in original.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let id_str = trimmed.split_whitespace().next().unwrap_or("");
+        match id_str.parse::<u64>() {
+            Ok(id) if id == tenant_id => {
+                found = true;
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    if !found {
+        return Envelope::AdminError {
+            reason: format!("tenant_id {tenant_id} not registered"),
+        };
+    }
+    if let Err(e) = write_atomic(tenants_path, &out) {
+        return Envelope::AdminError {
+            reason: format!("write tenants: {e}"),
+        };
+    }
+    tracing::info!(
+        "[coordinator/admin] {peer}: admin_id={admin_id} revoked tenant_id={tenant_id} (next restart drops it)"
+    );
+    Envelope::AdminRevokeTenantAck
 }
 
 /// Atomic append: read existing → append `line\n` → write
