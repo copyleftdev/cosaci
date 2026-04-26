@@ -458,7 +458,7 @@ fn tenants_add(args: &[String]) -> Result<(), String> {
                 "added tenant {tenant_id} on coord at {addr} (signing_fp[..8]={}, capacity={rate_capacity}, refill={rate_refill_per_sec}/s)",
                 &fingerprint_hex(&signing_fp)[..16],
             );
-            println!("note: takes effect on next coord restart");
+            println!("note: in effect immediately (coord auto-reloaded auth state)");
             Ok(())
         }
         Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
@@ -475,7 +475,7 @@ fn tenants_revoke(args: &[String]) -> Result<(), String> {
     match conn.request(Envelope::AdminRevokeTenant { tenant_id })? {
         Envelope::AdminRevokeTenantAck => {
             println!("revoked tenant {tenant_id} on coord at {addr}");
-            println!("note: takes effect on next coord restart");
+            println!("note: in effect immediately (coord auto-reloaded auth state)");
             Ok(())
         }
         Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
