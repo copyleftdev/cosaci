@@ -30,6 +30,7 @@ use cosaci_core::attestation::AttestationResult;
 use cosaci_core::capabilities::{
     Candidate, Capabilities, JobRequirements, Platform, Runtime, select_capability_aware_committee,
 };
+use cosaci_core::clock::SystemClock;
 use cosaci_core::merkle_log::{FileStore, MerkleLog, hash_bytes};
 use cosaci_core::quorum::{Outcome, RunnerId, Vote, VoteResult, Weight, aggregate};
 use cosaci_core::retrieval::{JobRecord, build_bundle};
@@ -38,7 +39,10 @@ use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope
 use cosaci_protocol::tls::{install_crypto_provider, server_config_from_paths_with_crl};
 use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
 use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_state, replay};
+use cosaci_state::rate_limit::RateLimiter;
 use cosaci_state::stake_ledger::StakeLedger;
+use cosaci_state::submission_auth::{AuthCheck, JobSubmissionPayload, verify_and_admit};
+use cosaci_state::tenant::{TenantRegistry, parse_hex32};
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
@@ -47,6 +51,11 @@ use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_arg
 /// to 60). v0.3 dispatches `kind` to a canned WASM module — once
 /// the deterministic source-fetching step (#40) lands, submissions
 /// will carry arbitrary module bytes + args_cbor + a pipeline.
+///
+/// Issue #46 added the auth fields (`tenant_id`, `nonce`, `pubkey_hex`,
+/// `signature_hex`). They are optional at the wire level so legacy
+/// submissions still parse, but the coord rejects auth-less
+/// submissions when `--tenants <path>` was supplied at startup.
 #[derive(Debug, Clone, Deserialize)]
 struct JobSubmission {
     kind: JobKind,
@@ -54,6 +63,19 @@ struct JobSubmission {
     b: i32,
     #[serde(default = "default_deadline_secs")]
     deadline_secs: u32,
+    /// Tenant id (issue #46). Required when `--tenants` is set.
+    #[serde(default)]
+    tenant_id: Option<u64>,
+    /// Replay-protection nonce (issue #46).
+    #[serde(default)]
+    nonce: Option<u128>,
+    /// Lowercase-hex 32-byte ed25519 pubkey of the signer.
+    #[serde(default)]
+    pubkey_hex: Option<String>,
+    /// Lowercase-hex 64-byte ed25519 signature over the canonical
+    /// `JobSubmissionPayload` bytes.
+    #[serde(default)]
+    signature_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -61,6 +83,18 @@ struct JobSubmission {
 enum JobKind {
     Add,
     Mul,
+}
+
+impl JobKind {
+    /// Wire-string form (matches the issue-#32 lowercase contract +
+    /// the `serde(rename_all = "lowercase")` Deserialize derive).
+    /// Used when reconstructing the canonical signing payload.
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Mul => "mul",
+        }
+    }
 }
 
 fn default_deadline_secs() -> u32 {
@@ -163,6 +197,12 @@ fn main() -> std::io::Result<()> {
     let queue_cap: usize = arg_or(&args, "--queue-cap", "64")
         .parse()
         .expect("queue-cap usize");
+    // `--tenants <path>` (issue #46): enable per-tenant signed
+    // submissions. Empty (default) preserves the legacy unauthenticated
+    // stdin path. Non-empty: load the tenant registry at startup,
+    // verify every submission's signature, and rate-limit admission
+    // per the tenant's configured token bucket.
+    let tenants_path = arg_or(&args, "--tenants", "");
 
     let enrollment: Option<Arc<EnrollmentSet>> = if enrollment_path.is_empty() {
         None
@@ -286,13 +326,33 @@ fn main() -> std::io::Result<()> {
         tracing::info!("[coordinator] read API listening on {read_addr} (mTLS)");
     }
 
+    // Tenant registry + rate limiter (issue #46). Empty path =
+    // disabled (legacy unauthenticated submission path). Non-empty:
+    // load registry, set up a per-tenant token-bucket limiter, and
+    // gate every stdin submission through `verify_and_admit`.
+    let auth_state: Option<Arc<Mutex<AuthState>>> = if tenants_path.is_empty() {
+        None
+    } else {
+        let registry = TenantRegistry::load_from_path(&tenants_path)?;
+        tracing::info!(
+            "[coordinator] auth gate enabled ({} tenant(s) loaded from {})",
+            registry.len(),
+            tenants_path
+        );
+        // Default bucket params here are placeholders — every
+        // `verify_and_admit` call passes per-tenant capacity +
+        // refill via `accept_with_config`.
+        let limiter = RateLimiter::new(SystemClock, 0, 0);
+        Some(Arc::new(Mutex::new(AuthState { registry, limiter })))
+    };
+
     // Stdin submission queue (issue #32). Only initialized when
     // `--submit-stdin` was given. The reader thread closes the
     // sender when stdin EOFs; the main loop's `recv` returns Err
     // and the coord drains.
     let submission_rx = if submit_stdin {
         let (tx, rx) = sync_channel::<JobSubmission>(queue_cap);
-        spawn_stdin_reader(tx);
+        spawn_stdin_reader(tx, auth_state.clone());
         tracing::info!(
             "[coordinator] --submit-stdin enabled (queue cap {queue_cap}); reading NDJSON job submissions from stdin"
         );
@@ -872,8 +932,17 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Stdin submission reader (issue #32)
+// Stdin submission reader (issue #32) + auth gate (issue #46)
 // ────────────────────────────────────────────────────────────────────────
+
+/// Mutable state the stdin reader consults on every line: the
+/// loaded tenant registry + a per-tenant token-bucket limiter.
+/// Wrapped in `Arc<Mutex<...>>` because the reader thread mutates
+/// the limiter (consuming tokens) on each accepted submission.
+struct AuthState {
+    registry: TenantRegistry,
+    limiter: RateLimiter<SystemClock>,
+}
 
 /// Spawn a daemon thread that reads NDJSON `JobSubmission` records
 /// from stdin and pushes them to the bounded queue. Each line is
@@ -885,7 +954,12 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// policy). When stdin EOFs, the thread drops the sender so the
 /// main loop's `recv_timeout` returns `Disconnected` and the
 /// coordinator drains.
-fn spawn_stdin_reader(tx: SyncSender<JobSubmission>) {
+///
+/// When `auth_state` is `Some`, every parsed submission is gated
+/// through `cosaci_state::submission_auth::verify_and_admit`
+/// before it can enter the queue. Failed auth verdicts log a
+/// reason at the warn level and the submission is dropped.
+fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mutex<AuthState>>>) {
     thread::spawn(move || {
         let stdin = std::io::stdin();
         let reader = stdin.lock();
@@ -911,6 +985,50 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>) {
                     continue;
                 }
             };
+            // Issue #46: auth gate. When `auth_state` is set,
+            // `verify_and_admit` decides admission. Failed
+            // submissions are dropped before the queue.
+            if let Some(state) = auth_state.as_ref() {
+                let mut g = state.lock().expect("auth state poisoned");
+                let AuthState {
+                    ref registry,
+                    ref mut limiter,
+                } = *g;
+                let verdict = check_submission(&sub, registry, limiter);
+                match verdict {
+                    AuthCheck::Ok => {}
+                    AuthCheck::UnknownTenant => {
+                        tracing::warn!(
+                            "[coordinator] auth gate: unknown tenant_id={:?} (kind={:?} a={} b={})",
+                            sub.tenant_id,
+                            sub.kind,
+                            sub.a,
+                            sub.b
+                        );
+                        continue;
+                    }
+                    AuthCheck::BadSignature => {
+                        tracing::warn!(
+                            "[coordinator] auth gate: bad signature (tenant_id={:?} kind={:?} a={} b={})",
+                            sub.tenant_id,
+                            sub.kind,
+                            sub.a,
+                            sub.b
+                        );
+                        continue;
+                    }
+                    AuthCheck::RateLimited => {
+                        tracing::warn!(
+                            "[coordinator] auth gate: rate-limited (tenant_id={:?} kind={:?} a={} b={})",
+                            sub.tenant_id,
+                            sub.kind,
+                            sub.a,
+                            sub.b
+                        );
+                        continue;
+                    }
+                }
+            }
             match tx.try_send(sub) {
                 Ok(()) => {}
                 Err(TrySendError::Full(dropped)) => {
@@ -930,6 +1048,65 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>) {
         tracing::info!("[coordinator] stdin EOF; submission reader exiting");
         // Dropping `tx` here closes the channel.
     });
+}
+
+/// Translate the wire-shape `JobSubmission` into a canonical
+/// `JobSubmissionPayload`, then run `verify_and_admit` against
+/// the tenant registry + rate limiter. Missing or malformed auth
+/// fields are reported as `BadSignature` (the deliberately-merged
+/// signature-failure verdict; see hypothesis card).
+fn check_submission(
+    sub: &JobSubmission,
+    registry: &TenantRegistry,
+    limiter: &mut RateLimiter<SystemClock>,
+) -> AuthCheck {
+    let (Some(tenant_id), Some(nonce), Some(pubkey_hex), Some(signature_hex)) = (
+        sub.tenant_id,
+        sub.nonce,
+        sub.pubkey_hex.as_ref(),
+        sub.signature_hex.as_ref(),
+    ) else {
+        return AuthCheck::BadSignature;
+    };
+    let Some(pubkey) = parse_hex32(pubkey_hex) else {
+        return AuthCheck::BadSignature;
+    };
+    let Some(signature) = parse_hex64(signature_hex) else {
+        return AuthCheck::BadSignature;
+    };
+    let payload = JobSubmissionPayload {
+        tenant_id,
+        kind: sub.kind.as_wire().to_string(),
+        a: sub.a,
+        b: sub.b,
+        deadline_secs: sub.deadline_secs,
+        nonce,
+    };
+    verify_and_admit(&payload, &pubkey, &signature, registry, limiter)
+}
+
+/// Parse 128 lowercase-hex chars into a `[u8; 64]` (an ed25519
+/// signature). Returns `None` for any non-hex character or wrong
+/// length.
+fn parse_hex64(s: &str) -> Option<[u8; 64]> {
+    if s.len() != 128 {
+        return None;
+    }
+    let mut out = [0_u8; 64];
+    for (i, byte_pair) in s.as_bytes().chunks_exact(2).enumerate() {
+        let hi = hex_nibble(byte_pair[0])?;
+        let lo = hex_nibble(byte_pair[1])?;
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────

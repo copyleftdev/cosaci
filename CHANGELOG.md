@@ -12,6 +12,70 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — submission auth gate + per-tenant rate limit (#46, partial)
+
+- New `cosaci-state::tenant` module: `TenantRecord`,
+  `TenantRegistry`, file-format parser. Wire shape mirrors
+  `enrollment.txt` (one record per line, whitespace-separated,
+  `#` comments) so an operator manages both files with one
+  syntax. Stores the pubkey **fingerprint**, not the raw pubkey
+  — submissions carry the raw pubkey for verification, and the
+  coord checks `SHA-256(pubkey) == registry[tenant_id].signing_fp`
+  before signature work.
+- New `cosaci-state::submission_auth` module: `JobSubmissionPayload`
+  (canonical signable shape), `canonical_bytes` (ciborium —
+  shared with the rest of the wire protocol so signing path and
+  parse path agree byte-for-byte), `verify_and_admit` (three-
+  stage gate: tenant lookup → signature verification → rate
+  limit). The gate is pure relative to its injected
+  `RateLimiter`; the limiter itself is `Clock`-trait-injected
+  for DST.
+- `cosaci-state::rate_limit::RateLimiter::accept_with_config`
+  (new) — admits a request using per-tenant `(capacity,
+  refill_per_sec)` rather than the limiter's defaults. Existing
+  `accept` is unchanged; the `tenant-rate-limit` hypothesis card
+  still passes. Buckets are initialized at first sight from the
+  per-call config and retain whatever balance is in them on
+  subsequent calls — matches the v0.3 model where rate config
+  is loaded from the registry at coord startup and stable for
+  the process lifetime.
+- Coordinator gains `--tenants <path>` (issue #46). Empty
+  preserves the legacy unauthenticated stdin path; non-empty
+  loads the registry, sets up a per-tenant token-bucket limiter,
+  and gates every stdin submission through `verify_and_admit`.
+  Failed verdicts (`UnknownTenant` / `BadSignature` /
+  `RateLimited`) are logged with the offending `tenant_id` and
+  the submission is dropped before the queue. **Failed auth
+  does not consume tokens** — an attacker cannot drain a legit
+  tenant's bucket with forged signatures.
+- The `JobSubmission` wire shape gains four optional fields —
+  `tenant_id`, `nonce`, `pubkey_hex`, `signature_hex` — so
+  legacy unsigned submissions still parse. When `--tenants` is
+  set, all four are required; missing fields produce a
+  `BadSignature` verdict (the deliberately-merged
+  signature-failure response — see hypothesis card).
+- New hypothesis card `hypotheses/submission-auth-gate.md`
+  (class A, Tier 0). Six Hegel properties: well-formed
+  submission admitted; unknown tenant rejected without bucket
+  spend; wrong pubkey is BadSignature; tampered payload is
+  BadSignature; capacity+1 is RateLimited; tenant buckets are
+  isolated.
+- `demo_networked` pass 3 (stdin submission) now signs its two
+  submissions with a derived demo tenant key and writes the
+  matching `tenants.txt` for the coord. CI smoke step grep
+  matches `auth gate enabled` so a regression that silently
+  disabled the gate can't pass.
+- New deps: `cosaci-state` gains `ciborium` (workspace).
+- RUNBOOK §1e updated with the signed-submission wire shape
+  and the four `Out of scope (follow-on)` entries.
+- **Out of scope (follow-on PRs):** replay-protection
+  enforcement on `nonce` (signed but uniqueness not enforced
+  via the bloom filter yet); `cosaci-admin tenants
+  add/list/revoke` subcommand (operator hand-edits
+  `tenants.txt` for now); Unix-socket / REST submission
+  endpoint; hierarchical / fair queuing across tenants;
+  distributed rate limiting across coordinator shards.
+
 ### Added — deterministic source-fetching step (#40, partial)
 
 - New `cosaci-jobs::source_fetch` module:

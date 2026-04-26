@@ -104,6 +104,10 @@ jobs:
           grep -q "kind=Add a=1 b=2"         <<<"$OUT"
           grep -q "kind=Mul a=3 b=5"         <<<"$OUT"
           grep -q "stdin closed and queue drained" <<<"$OUT"
+          # Pass 3 also exercises the issue #46 auth gate: the
+          # tenants registry must load and the signed submissions
+          # must verify.
+          grep -q "auth gate enabled" <<<"$OUT"
           grep -q "All three rounds completed cleanly" <<<"$OUT"
 
   # Audit gate (issue #10): hard fail on advisories / unapproved

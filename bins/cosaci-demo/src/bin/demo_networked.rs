@@ -21,7 +21,19 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use cosaci_core::signing::Keypair;
 use cosaci_protocol::tls::{SUBJECT_SERVER, TestCa, install_crypto_provider};
 use cosaci_state::enrollment::{fingerprint, fingerprint_hex};
+use cosaci_state::submission_auth::{JobSubmissionPayload, canonical_bytes};
 use cosaci_vrf::vrf::VrfKeypair;
+
+/// Lowercase-hex-encode a byte slice. Used for pubkey + signature
+/// fields in the pass-3 NDJSON submission lines.
+fn lower_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(&mut s, "{b:02x}").expect("write to String");
+    }
+    s
+}
 
 const ADDR_BOUNDED: &str = "127.0.0.1:7879";
 const ADDR_SIGTERM: &str = "127.0.0.1:7880";
@@ -41,7 +53,25 @@ struct Certs {
     /// Path to the enrollment file (issue #45) listing the FLEET demo
     /// agents — coord rejects any registration not on this list.
     enrollment: PathBuf,
+    /// Path to the tenant registry file (issue #46). Contains a
+    /// single demo tenant whose signing key is derived from the
+    /// fixed seed in `demo_tenant_seed()`.
+    tenants: PathBuf,
 }
+
+/// Deterministic seed for the demo tenant's ed25519 signing key.
+/// The launcher signs pass-3 submissions with this key; the coord
+/// loads the matching pubkey fingerprint from the tenants file.
+fn demo_tenant_seed() -> [u8; 32] {
+    let mut seed = [0_u8; 32];
+    seed[0] = 0xde;
+    seed[1] = 0xad;
+    seed[2] = 0xbe;
+    seed[3] = 0xef;
+    seed
+}
+
+const DEMO_TENANT_ID: u64 = 1;
 
 fn main() {
     install_crypto_provider();
@@ -175,6 +205,11 @@ fn run_round(
         coord_args.push("--submit-stdin".into());
         coord_args.push("--queue-cap".into());
         coord_args.push("8".into());
+        // Issue #46: enable the auth gate — submissions must be
+        // signed by the demo tenant key registered in
+        // `certs.tenants`.
+        coord_args.push("--tenants".into());
+        coord_args.push(certs.tenants.to_string_lossy().into());
     }
 
     let stdin_setting = if matches!(kind, RoundKind::SubmitStdin) {
@@ -298,19 +333,43 @@ fn run_round(
         // (kind, a, b) tuples so a regression that ignored the
         // submission and re-used the canned --a/--b would produce
         // wrong artifact_hashes and the quorum lines would mismatch.
+        //
+        // Issue #46: each submission is signed under the demo
+        // tenant's ed25519 key. The coord's `--tenants` registry
+        // holds the matching pubkey fingerprint, so unsigned or
+        // wrongly-signed submissions are rejected at the auth gate.
         // Closing stdin (drop the handle) is the shutdown signal
         // — coord's main loop notices `Disconnected` after the
         // queue drains.
         let mut stdin = coord.stdin.take().expect("coord stdin piped");
         thread::spawn(move || {
+            let kp = Keypair::from_seed(demo_tenant_seed());
+            let pk = kp.verifying_key().to_bytes();
             // Wait briefly so coord's tracing line for the fleet
             // assembly comes out before our submissions — keeps
             // the smoke output readable.
             thread::sleep(Duration::from_millis(500));
-            for line in [
-                r#"{"kind":"add","a":1,"b":2}"#,
-                r#"{"kind":"mul","a":3,"b":5}"#,
-            ] {
+            let payloads = [
+                ("add", 1_i32, 2_i32, 60_u32, 0xa1_u128),
+                ("mul", 3_i32, 5_i32, 60_u32, 0xb2_u128),
+            ];
+            for (kind, a, b, deadline_secs, nonce) in payloads {
+                let payload = JobSubmissionPayload {
+                    tenant_id: DEMO_TENANT_ID,
+                    kind: kind.to_string(),
+                    a,
+                    b,
+                    deadline_secs,
+                    nonce,
+                };
+                let bytes = canonical_bytes(&payload).expect("encode payload");
+                let sig = kp.sign(&bytes).to_bytes();
+                let line = format!(
+                    r#"{{"kind":"{kind}","a":{a},"b":{b},"deadline_secs":{deadline_secs},"tenant_id":{tenant_id},"nonce":{nonce},"pubkey_hex":"{pk_hex}","signature_hex":"{sig_hex}"}}"#,
+                    tenant_id = DEMO_TENANT_ID,
+                    pk_hex = lower_hex(&pk),
+                    sig_hex = lower_hex(&sig),
+                );
                 if let Err(e) = writeln!(stdin, "{line}") {
                     eprintln!("[launcher] stdin write error: {e}");
                     return;
@@ -394,6 +453,20 @@ fn generate_certs() -> Certs {
     }
     fs::write(&enrollment_path, enrollment_text).expect("write enrollment file");
 
+    // Tenants file (issue #46). One demo tenant, capacity 100,
+    // refill 10/sec — generous enough that pass 3's two
+    // submissions never tip the bucket past empty.
+    let tenants_path = temp_dir.join("tenants.txt");
+    let demo_tenant_pk = Keypair::from_seed(demo_tenant_seed())
+        .verifying_key()
+        .to_bytes();
+    let demo_tenant_fp_hex = fingerprint_hex(&fingerprint(&demo_tenant_pk));
+    let tenants_text = format!(
+        "# CosaCI demo tenant registry\n{} {} 100 10 {}\n",
+        DEMO_TENANT_ID, demo_tenant_fp_hex, now_unix_ns
+    );
+    fs::write(&tenants_path, tenants_text).expect("write tenants file");
+
     Certs {
         temp_dir,
         ca: ca_path,
@@ -401,6 +474,7 @@ fn generate_certs() -> Certs {
         server_key: server_key_path,
         agents,
         enrollment: enrollment_path,
+        tenants: tenants_path,
     }
 }
 

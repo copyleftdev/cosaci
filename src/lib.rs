@@ -20,6 +20,7 @@ pub use cosaci_core::{
 pub use cosaci_state::{
     aggregator, enrollment, github_checks, journal, lease, partial_quorum, partition, rate_limit,
     registry, replay, replicated_cluster, sharding, sharding_handoff, stake_ledger,
+    submission_auth, tenant,
 };
 // Re-exports from cosaci-protocol (issue #3).
 pub use cosaci_protocol::{proto, tls};
