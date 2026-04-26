@@ -12,6 +12,68 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — webhook listener bin (#52 follow-on)
+
+- New workspace bin `bins/cosaci-webhook-listener/` (binary
+  name `webhook-listener`). Synchronous HTTP/1.1 listener via
+  `tiny_http` 0.12 (one new dep, MIT/Apache-2.0). Two routes:
+  - `POST /webhook/github` — verify `X-Hub-Signature-256`
+    HMAC against `--github-secret`, parse `X-GitHub-Event`,
+    compose `<kind>.<action>` from the JSON body's `action`
+    field.
+  - `POST /webhook/gitlab` — verify `X-Gitlab-Token` against
+    `--gitlab-token`, compose the event name from
+    `X-Gitlab-Event` plus the body's `object_kind`.
+  Verified events feed `cosaci_webhook::translate`; matching
+  pipelines are wrapped in `JobSubmissionPayload`-shaped
+  records, signed under the `--tenant-key` ed25519 seed,
+  and emitted as NDJSON lines on stdout. Bad signature →
+  401; bad request body → 400; matching event → 202 with the
+  submission count in the body.
+- Intended deployment is a Unix-pipe stack:
+  `webhook-listener … | coordinator --submit-stdin --tenants
+  …`. No TLS termination in the bin — operators front it
+  with nginx / Caddy / a load balancer.
+- New module `cosaci_webhook::translate` — the pure event →
+  resolved-pipeline translator the listener wraps. Three
+  responsibilities: (1) match the inbound event name against
+  each `[[pipeline]]`'s `on = […]` list; (2) resolve
+  `{{ event.<dot.path> }}` placeholders against the JSON
+  body via dot-path lookup (only string/number/bool scalars
+  resolve; objects/arrays are ambiguous and refuse); (3)
+  refuse unsupported namespaces (`{{ env.* }}`) and refuse
+  placeholders in literal-only fields (`exec-wasm` step's
+  `module_path` / `args_cbor_hex`) loudly.
+- Fixture-replay integration test
+  `tests/webhook_listener_translate.rs` (7 tests). Closes
+  the recorded-fixture acceptance criterion of #52 at the
+  algebra layer:
+  - `github_pr_synchronize_resolves_url_and_head_sha`
+  - `gitlab_push_resolves_clone_url_and_sha`
+  - `pipeline_with_non_matching_event_returns_no_resolutions`
+  - `unresolved_placeholder_is_an_error`
+  - `unsupported_namespace_is_an_error`
+  - `placeholder_in_exec_wasm_field_is_rejected`
+  - `multiple_pipelines_match_independently`
+  Fixtures live under `tests/fixtures/webhook/`
+  (`github_pull_request_synchronize.json`,
+  `gitlab_push.json`).
+- New deps: `tiny_http` 0.12 (workspace).
+- **Out of scope (follow-on PR).** Listener bin pieces that
+  don't change the falsifiable algebra:
+  - TLS termination / mTLS (today the operator fronts the
+    bin with a TLS proxy).
+  - Per-tenant manifest routing (today one listener process
+    serves one tenant, one manifest).
+  - SCM-side delivery retry handling (today a 5xx response
+    is the SCM provider's problem; the listener has no
+    retry queue).
+  - Lifting the v0.3 listener path beyond the canned-module
+    `(kind, a, b)` shape — once the coord switches to
+    arbitrary submitted pipelines (a #40 follow-on), the
+    listener will surface the resolved `Step::SourceFetch`
+    + `Step::ExecWasm` chain as-is.
+
 ### Added — webhook ingest algebra (#52, partial)
 
 - New workspace crate `cosaci-webhook` (10th workspace member).

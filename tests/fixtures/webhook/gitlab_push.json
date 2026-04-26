@@ -1,0 +1,19 @@
+{
+  "object_kind": "push",
+  "ref": "refs/heads/main",
+  "checkout_sha": "abcdef0011223344556677889900aabbccddeeff",
+  "user_username": "alice",
+  "project": {
+    "id": 7,
+    "name": "widget-svc",
+    "path_with_namespace": "example-org/widget-svc",
+    "git_http_url": "https://gitlab.example.test/example-org/widget-svc.git",
+    "git_ssh_url": "git@gitlab.example.test:example-org/widget-svc.git"
+  },
+  "commits": [
+    {
+      "id": "abcdef0011223344556677889900aabbccddeeff",
+      "message": "feat: ship the widget"
+    }
+  ]
+}
