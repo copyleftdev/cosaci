@@ -45,25 +45,65 @@ use cosaci_state::enrollment::{EnrollmentSet, fingerprint, fingerprint_hex};
 use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_state, replay};
 use cosaci_state::rate_limit::RateLimiter;
 use cosaci_state::stake_ledger::StakeLedger;
-use cosaci_state::submission_auth::{AuthCheck, JobSubmissionPayload, verify_and_admit};
+use cosaci_state::submission_auth::{
+    AuthCheck, JobSubmissionPayload, PipelineSubmissionPayload, verify_and_admit,
+    verify_and_admit_pipeline,
+};
 use cosaci_state::tenant::{
     TenantRegistry, fingerprint_hex as tenant_fingerprint_hex, parse_hex32,
 };
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
 
-/// One job submission read from stdin (issue #32). NDJSON wire shape:
+/// One job submission read from stdin. Two wire shapes are
+/// accepted; `parse_submission_line` dispatches on the
+/// presence of the discriminating field (`kind` for the
+/// legacy v0.3 shape, `pipeline_cbor_hex` for the v0.5 shape
+/// added in #106 PR 2 of N).
+///
+/// We do not derive `Deserialize` with `#[serde(untagged)]`
+/// because untagged dispatch buffers the JSON into a
+/// `serde_json::Value` first, which forces our `nonce: u128`
+/// through an f64 round-trip and silently breaks dispatch on
+/// any line carrying a nonce. `parse_submission_line` peeks
+/// the discriminator on a `Value` and then re-deserializes
+/// directly from the raw line into the chosen struct, which
+/// goes through serde_json's number path and preserves u128.
+///
+/// The legacy variant remains the only one the run loop
+/// executes today — pipeline-shape submissions are gated
+/// through `verify_and_admit_pipeline` and then **dropped**
+/// at the reader, with a log line tagged `TODO #106 PR 3 of N`
+/// until the executor wiring lands. They still consume rate-
+/// limit tokens and burn replay nonces, so the auth posture
+/// is production-ready ahead of the executor.
+#[derive(Debug, Clone)]
+enum JobSubmission {
+    Legacy(LegacyJobSubmission),
+    Pipeline(PipelineJobSubmission),
+}
+
+/// Parse one NDJSON submission line into the right variant.
+/// See `JobSubmission` for why we don't use `#[serde(untagged)]`.
+fn parse_submission_line(line: &str) -> Result<JobSubmission, serde_json::Error> {
+    let v: serde_json::Value = serde_json::from_str(line)?;
+    if v.get("pipeline_cbor_hex").is_some() {
+        serde_json::from_str::<PipelineJobSubmission>(line).map(JobSubmission::Pipeline)
+    } else {
+        serde_json::from_str::<LegacyJobSubmission>(line).map(JobSubmission::Legacy)
+    }
+}
+
+/// Legacy v0.3 NDJSON wire shape:
 /// `{"kind":"add","a":1,"b":2}` (deadline_secs optional, defaults
-/// to 60). v0.3 dispatches `kind` to a canned WASM module — once
-/// the deterministic source-fetching step (#40) lands, submissions
-/// will carry arbitrary module bytes + args_cbor + a pipeline.
+/// to 60). Dispatches `kind` to a canned WASM module.
 ///
 /// Issue #46 added the auth fields (`tenant_id`, `nonce`, `pubkey_hex`,
 /// `signature_hex`). They are optional at the wire level so legacy
 /// submissions still parse, but the coord rejects auth-less
 /// submissions when `--tenants <path>` was supplied at startup.
 #[derive(Debug, Clone, Deserialize)]
-struct JobSubmission {
+struct LegacyJobSubmission {
     kind: JobKind,
     a: i32,
     b: i32,
@@ -80,6 +120,29 @@ struct JobSubmission {
     pubkey_hex: Option<String>,
     /// Lowercase-hex 64-byte ed25519 signature over the canonical
     /// `JobSubmissionPayload` bytes.
+    #[serde(default)]
+    signature_hex: Option<String>,
+}
+
+/// v0.5 pipeline-shaped NDJSON wire shape (issue #106):
+/// `{"pipeline_cbor_hex":"<hex>","tenant_id":...,"nonce":...,
+/// "pubkey_hex":"...","signature_hex":"..."}`.
+///
+/// `pipeline_cbor_hex` is lowercase-hex of the ciborium-encoded
+/// `cosaci_jobs::Pipeline`. Hex (vs base64) keeps the wire
+/// consistent with `pubkey_hex` / `signature_hex` and avoids
+/// a new workspace dep.
+#[derive(Debug, Clone, Deserialize)]
+struct PipelineJobSubmission {
+    pipeline_cbor_hex: String,
+    #[serde(default = "default_deadline_secs")]
+    deadline_secs: u32,
+    #[serde(default)]
+    tenant_id: Option<u64>,
+    #[serde(default)]
+    nonce: Option<u128>,
+    #[serde(default)]
+    pubkey_hex: Option<String>,
     #[serde(default)]
     signature_hex: Option<String>,
 }
@@ -421,7 +484,11 @@ fn main() -> std::io::Result<()> {
     // sender when stdin EOFs; the main loop's `recv` returns Err
     // and the coord drains.
     let submission_rx = if submit_stdin {
-        let (tx, rx) = sync_channel::<JobSubmission>(queue_cap);
+        // Only legacy-shape submissions enter the run-loop queue.
+        // Pipeline-shape submissions are dispatched (gated +
+        // logged-and-dropped) inside the reader thread, ahead of
+        // the queue, until #106 PR 3 lands the executor wiring.
+        let (tx, rx) = sync_channel::<LegacyJobSubmission>(queue_cap);
         spawn_stdin_reader(tx, auth_state.clone());
         tracing::info!(
             "[coordinator] --submit-stdin enabled (queue cap {queue_cap}); reading NDJSON job submissions from stdin"
@@ -1043,7 +1110,10 @@ const REPLAY_TTL_NS: u64 = 5 * 60 * 1_000_000_000;
 /// through `cosaci_state::submission_auth::verify_and_admit`
 /// before it can enter the queue. Failed auth verdicts log a
 /// reason at the warn level and the submission is dropped.
-fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mutex<AuthState>>>) {
+fn spawn_stdin_reader(
+    tx: SyncSender<LegacyJobSubmission>,
+    auth_state: Option<Arc<Mutex<AuthState>>>,
+) {
     thread::spawn(move || {
         let stdin = std::io::stdin();
         let reader = stdin.lock();
@@ -1059,7 +1129,7 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let sub: JobSubmission = match serde_json::from_str(trimmed) {
+            let sub: JobSubmission = match parse_submission_line(trimmed) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::warn!(
@@ -1070,8 +1140,10 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
                 }
             };
             // Issue #46: auth gate. When `auth_state` is set,
-            // `verify_and_admit` decides admission. Failed
-            // submissions are dropped before the queue.
+            // `check_submission` dispatches to `verify_and_admit`
+            // (legacy shape) or `verify_and_admit_pipeline`
+            // (pipeline shape, #106 PR 2). Failed verdicts are
+            // dropped before the queue.
             if let Some(state) = auth_state.as_ref() {
                 let mut g = state.lock().expect("auth state poisoned");
                 let AuthState {
@@ -1080,52 +1152,47 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
                     ref mut replay,
                 } = *g;
                 let verdict = check_submission(&sub, registry, limiter, replay);
+                let log_tag = submission_log_tag(&sub);
                 match verdict {
                     AuthCheck::Ok => {}
                     AuthCheck::UnknownTenant => {
-                        tracing::warn!(
-                            "[coordinator] auth gate: unknown tenant_id={:?} (kind={:?} a={} b={})",
-                            sub.tenant_id,
-                            sub.kind,
-                            sub.a,
-                            sub.b
-                        );
+                        tracing::warn!("[coordinator] auth gate: unknown tenant ({log_tag})");
                         continue;
                     }
                     AuthCheck::BadSignature => {
-                        tracing::warn!(
-                            "[coordinator] auth gate: bad signature (tenant_id={:?} kind={:?} a={} b={})",
-                            sub.tenant_id,
-                            sub.kind,
-                            sub.a,
-                            sub.b
-                        );
+                        tracing::warn!("[coordinator] auth gate: bad signature ({log_tag})");
                         continue;
                     }
                     AuthCheck::RateLimited => {
-                        tracing::warn!(
-                            "[coordinator] auth gate: rate-limited (tenant_id={:?} kind={:?} a={} b={})",
-                            sub.tenant_id,
-                            sub.kind,
-                            sub.a,
-                            sub.b
-                        );
+                        tracing::warn!("[coordinator] auth gate: rate-limited ({log_tag})");
                         continue;
                     }
                     AuthCheck::ReplayDetected => {
                         tracing::warn!(
-                            "[coordinator] auth gate: REPLAY (tenant_id={:?} nonce={:?} kind={:?} a={} b={}) — operator: investigate buggy producer or active attacker",
-                            sub.tenant_id,
-                            sub.nonce,
-                            sub.kind,
-                            sub.a,
-                            sub.b
+                            "[coordinator] auth gate: REPLAY ({log_tag}) — operator: investigate buggy producer or active attacker"
                         );
                         continue;
                     }
                 }
             }
-            match tx.try_send(sub) {
+            // Dispatch on shape. Pipeline-shape submissions pass
+            // the auth gate (which already burned the rate-limit
+            // token + recorded the replay nonce) but the executor
+            // wiring is pending #106 PR 3 of N, so we log and
+            // drop here rather than queueing for the run loop.
+            let legacy = match sub {
+                JobSubmission::Legacy(l) => l,
+                JobSubmission::Pipeline(p) => {
+                    tracing::info!(
+                        "[coordinator] pipeline-shape submission accepted by gate; execution pending #106 PR 3 of N (tenant_id={:?} nonce={:?} pipeline_cbor_bytes={})",
+                        p.tenant_id,
+                        p.nonce,
+                        p.pipeline_cbor_hex.len() / 2,
+                    );
+                    continue;
+                }
+            };
+            match tx.try_send(legacy) {
                 Ok(()) => {}
                 Err(TrySendError::Full(dropped)) => {
                     tracing::warn!(
@@ -1146,13 +1213,26 @@ fn spawn_stdin_reader(tx: SyncSender<JobSubmission>, auth_state: Option<Arc<Mute
     });
 }
 
-/// Translate the wire-shape `JobSubmission` into a canonical
-/// `JobSubmissionPayload`, then run `verify_and_admit` against
-/// the tenant registry + rate limiter. Missing or malformed auth
-/// fields are reported as `BadSignature` (the deliberately-merged
-/// signature-failure verdict; see hypothesis card).
+/// Dispatch the auth gate based on submission shape. Legacy
+/// shape goes through `verify_and_admit` (issue #46); pipeline
+/// shape goes through `verify_and_admit_pipeline` (issue #106).
+/// Missing or malformed auth fields surface as `BadSignature`
+/// (the deliberately-merged signature-failure verdict; see
+/// `hypotheses/submission-auth-gate.md`).
 fn check_submission(
     sub: &JobSubmission,
+    registry: &TenantRegistry,
+    limiter: &mut RateLimiter<SystemClock>,
+    replay: &mut cosaci_state::replay::ReplayGuard<SystemClock>,
+) -> AuthCheck {
+    match sub {
+        JobSubmission::Legacy(l) => check_legacy(l, registry, limiter, replay),
+        JobSubmission::Pipeline(p) => check_pipeline(p, registry, limiter, replay),
+    }
+}
+
+fn check_legacy(
+    sub: &LegacyJobSubmission,
     registry: &TenantRegistry,
     limiter: &mut RateLimiter<SystemClock>,
     replay: &mut cosaci_state::replay::ReplayGuard<SystemClock>,
@@ -1179,13 +1259,85 @@ fn check_submission(
         deadline_secs: sub.deadline_secs,
         nonce,
     };
-    let now_ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let now_ns = wall_clock_ns();
     verify_and_admit(
         &payload, &pubkey, &signature, now_ns, registry, limiter, replay,
     )
+}
+
+fn check_pipeline(
+    sub: &PipelineJobSubmission,
+    registry: &TenantRegistry,
+    limiter: &mut RateLimiter<SystemClock>,
+    replay: &mut cosaci_state::replay::ReplayGuard<SystemClock>,
+) -> AuthCheck {
+    let (Some(tenant_id), Some(nonce), Some(pubkey_hex), Some(signature_hex)) = (
+        sub.tenant_id,
+        sub.nonce,
+        sub.pubkey_hex.as_ref(),
+        sub.signature_hex.as_ref(),
+    ) else {
+        return AuthCheck::BadSignature;
+    };
+    let Some(pubkey) = parse_hex32(pubkey_hex) else {
+        return AuthCheck::BadSignature;
+    };
+    let Some(signature) = parse_hex64(signature_hex) else {
+        return AuthCheck::BadSignature;
+    };
+    let Some(pipeline_cbor) = parse_hex_bytes(&sub.pipeline_cbor_hex) else {
+        return AuthCheck::BadSignature;
+    };
+    let payload = PipelineSubmissionPayload {
+        tenant_id,
+        pipeline_cbor,
+        deadline_secs: sub.deadline_secs,
+        nonce,
+    };
+    let now_ns = wall_clock_ns();
+    verify_and_admit_pipeline(
+        &payload, &pubkey, &signature, now_ns, registry, limiter, replay,
+    )
+}
+
+/// Compact one-line tag identifying a submission for warn-log
+/// output. Distinguishes the two shapes without dumping the full
+/// pipeline_cbor.
+fn submission_log_tag(sub: &JobSubmission) -> String {
+    match sub {
+        JobSubmission::Legacy(l) => format!(
+            "shape=legacy tenant_id={:?} nonce={:?} kind={:?} a={} b={}",
+            l.tenant_id, l.nonce, l.kind, l.a, l.b
+        ),
+        JobSubmission::Pipeline(p) => format!(
+            "shape=pipeline tenant_id={:?} nonce={:?} pipeline_cbor_bytes={}",
+            p.tenant_id,
+            p.nonce,
+            p.pipeline_cbor_hex.len() / 2,
+        ),
+    }
+}
+
+fn wall_clock_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// Parse a lowercase-hex string of arbitrary even length into a
+/// byte vector. Returns `None` on odd length or any non-hex char.
+fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for byte_pair in s.as_bytes().chunks_exact(2) {
+        let hi = hex_nibble(byte_pair[0])?;
+        let lo = hex_nibble(byte_pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
 }
 
 /// Parse 128 lowercase-hex chars into a `[u8; 64]` (an ed25519
@@ -2058,5 +2210,279 @@ fn handle_read_client(
     };
     if let Err(e) = write_envelope(&mut stream, &resp) {
         tracing::warn!("[coordinator/read] {peer}: write failed: {e}");
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tests — coord-side wire/auth dispatch (#106 PR 2 of N)
+// ────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosaci_core::signing::Keypair;
+    use cosaci_state::submission_auth::canonical_bytes_pipeline;
+    use cosaci_state::tenant::{TenantRecord, fingerprint};
+
+    fn keypair_for_seed(b: u8) -> Keypair {
+        Keypair::from_seed([b; 32])
+    }
+
+    fn registry_with(kp: &Keypair, tenant_id: u64, capacity: u64) -> TenantRegistry {
+        let pk = kp.verifying_key().to_bytes();
+        let mut reg = TenantRegistry::new();
+        reg.insert(TenantRecord {
+            tenant_id,
+            signing_fp: fingerprint(&pk),
+            rate_capacity: capacity,
+            rate_refill_per_sec: capacity,
+            registered_at_unix_ns: 0,
+        })
+        .expect("insert tenant");
+        reg
+    }
+
+    fn fresh_limiter_replay() -> (
+        RateLimiter<SystemClock>,
+        cosaci_state::replay::ReplayGuard<SystemClock>,
+    ) {
+        (
+            RateLimiter::new(SystemClock, 0, 0),
+            cosaci_state::replay::ReplayGuard::new(SystemClock, REPLAY_TTL_NS),
+        )
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            s.push_str(&format!("{b:02x}"));
+        }
+        s
+    }
+
+    #[test]
+    fn legacy_ndjson_parses_to_legacy_variant() {
+        let line = r#"{"kind":"add","a":1,"b":2}"#;
+        let sub = parse_submission_line(line).expect("parse legacy");
+        match sub {
+            JobSubmission::Legacy(l) => {
+                assert!(matches!(l.kind, JobKind::Add));
+                assert_eq!(l.a, 1);
+                assert_eq!(l.b, 2);
+                assert_eq!(l.deadline_secs, default_deadline_secs());
+            }
+            JobSubmission::Pipeline(_) => panic!("legacy line matched Pipeline variant"),
+        }
+    }
+
+    #[test]
+    fn pipeline_ndjson_parses_to_pipeline_variant() {
+        let line = r#"{"pipeline_cbor_hex":"a0"}"#;
+        let sub = parse_submission_line(line).expect("parse pipeline");
+        match sub {
+            JobSubmission::Pipeline(p) => {
+                assert_eq!(p.pipeline_cbor_hex, "a0");
+                assert_eq!(p.tenant_id, None);
+                assert_eq!(p.deadline_secs, default_deadline_secs());
+            }
+            JobSubmission::Legacy(_) => panic!("pipeline line matched Legacy variant"),
+        }
+    }
+
+    #[test]
+    fn pipeline_ndjson_with_u128_nonce_parses() {
+        // Regression: serde's `#[serde(untagged)]` would silently
+        // fail on a u128 nonce because untagged dispatch buffers
+        // through `serde_json::Value` (f64-bound). Our
+        // `parse_submission_line` peeks the discriminator then
+        // re-deserializes from the raw line, preserving u128.
+        let line = r#"{"pipeline_cbor_hex":"a0","tenant_id":7,"nonce":42,"pubkey_hex":"00","signature_hex":"00"}"#;
+        let sub = parse_submission_line(line).expect("parse pipeline+u128");
+        match sub {
+            JobSubmission::Pipeline(p) => {
+                assert_eq!(p.tenant_id, Some(7));
+                assert_eq!(p.nonce, Some(42));
+            }
+            JobSubmission::Legacy(_) => panic!("matched Legacy"),
+        }
+    }
+
+    #[test]
+    fn legacy_ndjson_with_u128_nonce_parses() {
+        // Same regression on the legacy shape — guards against a
+        // future refactor that re-introduces a buffering dispatch.
+        let line = r#"{"kind":"mul","a":3,"b":4,"nonce":99}"#;
+        let sub = parse_submission_line(line).expect("parse legacy+u128");
+        match sub {
+            JobSubmission::Legacy(l) => assert_eq!(l.nonce, Some(99)),
+            JobSubmission::Pipeline(_) => panic!("matched Pipeline"),
+        }
+    }
+
+    #[test]
+    fn empty_object_rejected() {
+        // Neither shape can satisfy a bare `{}` — the dispatcher
+        // falls through to legacy (no discriminator) and that
+        // deserialize fails because `kind` is required. The reader
+        // thread logs and skips.
+        let line = r"{}";
+        assert!(parse_submission_line(line).is_err());
+    }
+
+    #[test]
+    fn parse_hex_bytes_round_trip() {
+        let bytes = vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0xff];
+        let hex = hex_encode(&bytes);
+        assert_eq!(parse_hex_bytes(&hex), Some(bytes));
+    }
+
+    #[test]
+    fn parse_hex_bytes_rejects_odd_length() {
+        assert!(parse_hex_bytes("abc").is_none());
+    }
+
+    #[test]
+    fn parse_hex_bytes_rejects_non_hex() {
+        assert!(parse_hex_bytes("zz").is_none());
+    }
+
+    #[test]
+    fn submission_log_tag_distinguishes_shapes() {
+        let legacy = JobSubmission::Legacy(LegacyJobSubmission {
+            kind: JobKind::Add,
+            a: 1,
+            b: 2,
+            deadline_secs: 60,
+            tenant_id: Some(7),
+            nonce: Some(42),
+            pubkey_hex: None,
+            signature_hex: None,
+        });
+        let pipeline = JobSubmission::Pipeline(PipelineJobSubmission {
+            pipeline_cbor_hex: "deadbeef".to_string(),
+            deadline_secs: 60,
+            tenant_id: Some(7),
+            nonce: Some(42),
+            pubkey_hex: None,
+            signature_hex: None,
+        });
+        assert!(submission_log_tag(&legacy).contains("shape=legacy"));
+        assert!(submission_log_tag(&pipeline).contains("shape=pipeline"));
+        // pipeline_cbor_bytes is the byte-count, not the char-count
+        assert!(submission_log_tag(&pipeline).contains("pipeline_cbor_bytes=4"));
+    }
+
+    #[test]
+    fn check_pipeline_round_trip_ok() {
+        let kp = keypair_for_seed(1);
+        let reg = registry_with(&kp, 1, 1000);
+        let (mut limiter, mut replay) = fresh_limiter_replay();
+
+        let pipeline_cbor = vec![0xa0_u8]; // CBOR empty map
+        let payload = PipelineSubmissionPayload {
+            tenant_id: 1,
+            pipeline_cbor: pipeline_cbor.clone(),
+            deadline_secs: 60,
+            nonce: 12345,
+        };
+        let bytes = canonical_bytes_pipeline(&payload).expect("encode");
+        let sig = kp.sign(&bytes).to_bytes();
+        let pk = kp.verifying_key().to_bytes();
+
+        let sub = JobSubmission::Pipeline(PipelineJobSubmission {
+            pipeline_cbor_hex: hex_encode(&pipeline_cbor),
+            deadline_secs: 60,
+            tenant_id: Some(1),
+            nonce: Some(12345),
+            pubkey_hex: Some(hex_encode(&pk)),
+            signature_hex: Some(hex_encode(&sig)),
+        });
+
+        assert_eq!(
+            check_submission(&sub, &reg, &mut limiter, &mut replay),
+            AuthCheck::Ok
+        );
+    }
+
+    #[test]
+    fn check_pipeline_wrong_key_is_bad_signature() {
+        let kp = keypair_for_seed(1);
+        let imposter = keypair_for_seed(2);
+        let reg = registry_with(&kp, 1, 1000);
+        let (mut limiter, mut replay) = fresh_limiter_replay();
+
+        let pipeline_cbor = vec![0xa0_u8];
+        let payload = PipelineSubmissionPayload {
+            tenant_id: 1,
+            pipeline_cbor: pipeline_cbor.clone(),
+            deadline_secs: 60,
+            nonce: 1,
+        };
+        let bytes = canonical_bytes_pipeline(&payload).expect("encode");
+        let sig = imposter.sign(&bytes).to_bytes();
+        let pk = imposter.verifying_key().to_bytes();
+
+        let sub = JobSubmission::Pipeline(PipelineJobSubmission {
+            pipeline_cbor_hex: hex_encode(&pipeline_cbor),
+            deadline_secs: 60,
+            tenant_id: Some(1),
+            nonce: Some(1),
+            pubkey_hex: Some(hex_encode(&pk)),
+            signature_hex: Some(hex_encode(&sig)),
+        });
+
+        assert_eq!(
+            check_submission(&sub, &reg, &mut limiter, &mut replay),
+            AuthCheck::BadSignature
+        );
+    }
+
+    #[test]
+    fn check_pipeline_unknown_tenant() {
+        let kp = keypair_for_seed(1);
+        let reg = TenantRegistry::new();
+        let (mut limiter, mut replay) = fresh_limiter_replay();
+
+        let pipeline_cbor = vec![0xa0_u8];
+        let payload = PipelineSubmissionPayload {
+            tenant_id: 999,
+            pipeline_cbor: pipeline_cbor.clone(),
+            deadline_secs: 60,
+            nonce: 1,
+        };
+        let bytes = canonical_bytes_pipeline(&payload).expect("encode");
+        let sig = kp.sign(&bytes).to_bytes();
+        let pk = kp.verifying_key().to_bytes();
+
+        let sub = JobSubmission::Pipeline(PipelineJobSubmission {
+            pipeline_cbor_hex: hex_encode(&pipeline_cbor),
+            deadline_secs: 60,
+            tenant_id: Some(999),
+            nonce: Some(1),
+            pubkey_hex: Some(hex_encode(&pk)),
+            signature_hex: Some(hex_encode(&sig)),
+        });
+
+        assert_eq!(
+            check_submission(&sub, &reg, &mut limiter, &mut replay),
+            AuthCheck::UnknownTenant
+        );
+    }
+
+    #[test]
+    fn check_pipeline_missing_auth_fields_is_bad_signature() {
+        let reg = TenantRegistry::new();
+        let (mut limiter, mut replay) = fresh_limiter_replay();
+        let sub = JobSubmission::Pipeline(PipelineJobSubmission {
+            pipeline_cbor_hex: "a0".to_string(),
+            deadline_secs: 60,
+            tenant_id: None,
+            nonce: None,
+            pubkey_hex: None,
+            signature_hex: None,
+        });
+        assert_eq!(
+            check_submission(&sub, &reg, &mut limiter, &mut replay),
+            AuthCheck::BadSignature
+        );
     }
 }

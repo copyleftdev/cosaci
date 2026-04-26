@@ -3,7 +3,7 @@ id: pipeline-submission
 source: SPEC.md §13 (v0.5 lift) / SPEC.md §6.2
 class: A
 status: passing
-test: tests/submission_auth_gate.rs
+test: tests/submission_auth_gate.rs + bins/cosaci-coordinator/src/main.rs (tests mod)
 depends_on:
   - submission-auth-gate
   - pipeline-determinism
@@ -87,12 +87,52 @@ Each property is a pointwise statement over the inputs of one
 + pipeline calls). No averaging, no probabilistic distribution
 — Hegel can falsify a single counterexample.
 
+## Coord-side dispatch (#106 PR 2 of N)
+
+The coord stdin reader accepts both wire shapes via a hand-
+rolled dispatcher, **not** `#[serde(untagged)]`:
+
+```text
+{"kind":"add",...}              → JobSubmission::Legacy
+{"pipeline_cbor_hex":"...",...} → JobSubmission::Pipeline
+```
+
+Why hand-rolled, not untagged: serde untagged-enum dispatch
+buffers the JSON into a `serde_json::Value` to try each
+variant. `Value`'s number type round-trips through f64, so
+**any line carrying a u128 `nonce` silently fails dispatch**.
+`parse_submission_line` peeks the discriminator on a `Value`
+and then re-deserializes the **raw** line directly into the
+chosen struct, which bypasses the f64 path and preserves
+u128. Regression tests live in `tests::*_with_u128_nonce_parses`.
+
+### Coord-side falsifiable claims
+
+For every NDJSON line the coord reads:
+
+- **Shape dispatch is deterministic and exhaustive** —
+  presence of `pipeline_cbor_hex` ⇒ pipeline shape; otherwise
+  legacy shape; lines satisfying neither schema are dropped at
+  the parser. No line is silently mis-classified.
+- **Pipeline shape passes through `verify_and_admit_pipeline`** —
+  the coord `check_submission` dispatches by variant; pipeline
+  submissions never get gated through the legacy
+  `verify_and_admit` (and vice versa).
+- **Pipeline shape does not reach the run-loop queue** — until
+  #106 PR 3 lands the executor wiring, pipeline submissions
+  that pass the auth gate are logged-and-dropped at the reader,
+  not enqueued. The auth posture (rate-limit token spend +
+  replay nonce burn) is still production-ready, so an attacker
+  can't probe future-pipeline-execution by exploiting the
+  current gate.
+
 ## Out of scope (follow-on)
 
-- Coord-side `Pipeline` decode + execution wiring. Tracked
-  under `pipeline-determinism` (passing, #39) and the v0.5
-  execution issues (#107 ExecNative cgroups sandbox, #108
-  CaptureLog + CaptureArtifact bundle).
+- Coord-side `Pipeline` **execution** wiring (decode CBOR →
+  `cosaci_jobs::Pipeline` → `run_one_job`). Tracked as #106
+  PR 3 of N and entangled with the executor refactor that
+  decouples `module: &Vec<u8>` from `run_one_job` (today's
+  signature is canned-WASM-shaped).
 - Per-step capability/resource enforcement at submission time.
   The current gate accepts any well-signed `pipeline_cbor`;
   step-level policy is enforced by the executor at run time
@@ -100,3 +140,5 @@ Each property is a pointwise statement over the inputs of one
 - Migration of existing v0.3 clients off the legacy
   `JobSubmissionPayload` shape — both shapes are accepted in
   parallel during the v0.4 → v0.5 transition.
+- Real-pipeline execution: tracked under #107 (ExecNative
+  cgroups sandbox) and #108 (CaptureLog + CaptureArtifact).
