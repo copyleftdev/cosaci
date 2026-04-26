@@ -1,10 +1,18 @@
-//! CosaCI admin CLI (issue #53).
+//! CosaCI admin CLI (issue #53 + follow-on).
 //!
-//! v0.3 scope: filesystem-only operations. The CLI reads/writes the
-//! enrollment file directly and reads the persistent Merkle log
-//! directly; it does NOT yet talk to the coordinator over the wire
-//! protocol. The wire-side (Admin* envelope variants + AuthN gate)
-//! lands in a follow-on once #46 ships.
+//! Two modes per subcommand: **filesystem-only** (the v0.3 default)
+//! and **wire-protocol** (read-only in v0.3). The CLI picks the
+//! mode by which flag is set:
+//!
+//! - `agents list --enrollment <path>`        → filesystem
+//! - `agents list --coord <addr> ...`         → wire
+//! - `log root --log <path>`                  → filesystem
+//! - `log root --coord <addr> ...`            → wire
+//!
+//! Wire-mode auth: mTLS handshake using the standard
+//! `--ca / --cert / --key` triple, then `AdminHello` signed by the
+//! `--admin-key` ed25519 seed. The matching pubkey fingerprint
+//! must be in the coord's `--admin-keys` allowlist.
 //!
 //! # Subcommands
 //!
@@ -39,10 +47,21 @@
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use cosaci_core::merkle_log::{FileStore, MerkleLog};
+use cosaci_core::signing::Keypair;
+use cosaci_protocol::proto::{
+    ADMIN_HELLO_CHALLENGE, AdminAgentRecord, Envelope, read_envelope, write_envelope,
+};
+use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_state::enrollment::{EnrolledRecord, EnrollmentSet, fingerprint_hex};
 
 const USAGE: &str = "\
@@ -51,7 +70,7 @@ cosaci-admin — administrative CLI for a CosaCI deployment
 USAGE:
     cosaci-admin <subcommand> [args]
 
-SUBCOMMANDS:
+FILESYSTEM-MODE SUBCOMMANDS (operate on local files):
     agents list     --enrollment <path>
     agents enroll   --enrollment <path> --runner-id <u64>
                     --signing-fp <hex64> --vrf-fp <hex64>
@@ -59,7 +78,14 @@ SUBCOMMANDS:
     agents revoke   --enrollment <path> --runner-id <u64>
     log root        --log <path>
 
+WIRE-MODE SUBCOMMANDS (talk to a running coord; read-only in v0.3):
+    agents list     --coord <addr> --ca <ca.pem> --cert <admin.pem>
+                    --key <admin.key.pem> --admin-key <seed-file>
+                    [--server-name <name>]
+    log root        --coord <addr> ...   (same auth flags)
+
 EXAMPLES:
+    # filesystem
     cosaci-admin agents list --enrollment /etc/cosaci/enrollment.txt
     cosaci-admin agents enroll \\
         --enrollment /etc/cosaci/enrollment.txt \\
@@ -68,6 +94,14 @@ EXAMPLES:
         --vrf-fp     $(sha256sum agent-7.vrf.pub     | cut -d' ' -f1) \\
         --reputation 1.0
     cosaci-admin log root --log /var/lib/cosaci/attest.log
+    # wire (read-only in v0.3)
+    cosaci-admin agents list \\
+        --coord 10.0.0.1:7880 \\
+        --ca /etc/cosaci/ca.pem \\
+        --cert /etc/cosaci/admin.pem \\
+        --key  /etc/cosaci/admin.key.pem \\
+        --admin-key /etc/cosaci/admin.seed
+    cosaci-admin log root --coord 10.0.0.1:7880 --ca ... --cert ... --key ... --admin-key ...
 ";
 
 fn main() -> ExitCode {
@@ -107,16 +141,16 @@ fn agents_cmd(args: &[String]) -> Result<(), String> {
 }
 
 fn agents_list(args: &[String]) -> Result<(), String> {
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return agents_list_wire(args, &addr);
+    }
     let path = required_flag(args, "--enrollment")?;
     let set = EnrollmentSet::load_from_path(&path).map_err(|e| format!("load {path}: {e}"))?;
     if set.is_empty() {
         println!("(no runners enrolled in {path})");
         return Ok(());
     }
-    println!(
-        "{:<10}  {:<16}  {:<16}  {:>22}  {:>10}",
-        "runner_id", "signing_fp", "vrf_fp", "enrolled_at", "reputation"
-    );
+    print_agents_header();
     // Sort by runner_id for deterministic output.
     let mut records: Vec<&EnrolledRecord> = set.iter().collect();
     records.sort_by_key(|r| r.runner_id);
@@ -133,6 +167,43 @@ fn agents_list(args: &[String]) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn print_agents_header() {
+    println!(
+        "{:<10}  {:<16}  {:<16}  {:>22}  {:>10}",
+        "runner_id", "signing_fp", "vrf_fp", "enrolled_at", "reputation"
+    );
+}
+
+fn agents_list_wire(args: &[String], addr: &str) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
+    match conn.request(Envelope::AdminListAgents)? {
+        Envelope::AdminAgentList { entries } => {
+            if entries.is_empty() {
+                println!("(no runners enrolled per coord at {addr})");
+                return Ok(());
+            }
+            print_agents_header();
+            // The coord already returns sorted-by-runner_id, but
+            // re-sort defensively in case a future change relaxes
+            // that — the CLI's contract is "deterministic output".
+            let mut entries: Vec<AdminAgentRecord> = entries;
+            entries.sort_by_key(|e| e.runner_id);
+            for r in entries {
+                let s_short = &fingerprint_hex(&r.signing_fp)[..16];
+                let v_short = &fingerprint_hex(&r.vrf_fp)[..16];
+                let rep = (r.initial_reputation_thousandths.min(1000) as f32) / 1000.0;
+                println!(
+                    "{:<10}  {:<16}  {:<16}  {:>22}  {:>10.3}",
+                    r.runner_id, s_short, v_short, r.enrolled_at_unix_ns, rep
+                );
+            }
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
 }
 
 fn agents_enroll(args: &[String]) -> Result<(), String> {
@@ -241,6 +312,9 @@ fn log_cmd(args: &[String]) -> Result<(), String> {
 }
 
 fn log_root(args: &[String]) -> Result<(), String> {
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return log_root_wire(args, &addr);
+    }
     let path = required_flag(args, "--log")?;
     let log = MerkleLog::<FileStore>::open(&path).map_err(|e| format!("open {path}: {e}"))?;
     let len = log.len();
@@ -254,6 +328,24 @@ fn log_root(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn log_root_wire(args: &[String], addr: &str) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
+    match conn.request(Envelope::AdminGetLogRoot)? {
+        Envelope::AdminLogRoot { root, length } => {
+            match root {
+                Some(r) => {
+                    println!("length: {length}");
+                    println!("root:   {}", hex_lower(&r));
+                }
+                None => println!("length: 0 (log is empty; no root)"),
+            }
+            Ok(())
+        }
+        Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
+        other => Err(format!("unexpected response: {other:?}")),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -334,4 +426,91 @@ fn write_atomic(path: &str, content: &str) -> io::Result<()> {
         f.sync_all()?;
     }
     fs::rename(&tmp, path)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Admin wire-protocol client (issue #53 follow-on)
+// ────────────────────────────────────────────────────────────────────────
+
+type ClientStream = StreamOwned<ClientConnection, TcpStream>;
+
+struct AdminWireConn {
+    stream: ClientStream,
+}
+
+impl AdminWireConn {
+    /// Open an mTLS connection to coord's `--admin-addr`, send an
+    /// `AdminHello` signed under the operator's admin signing key,
+    /// and wait for the coord's `AdminWelcome`. Returns a handle
+    /// whose `.request(env)` writes one envelope and reads one
+    /// envelope back.
+    fn connect(args: &[String], addr: &str) -> Result<Self, String> {
+        install_crypto_provider();
+        let ca_path = required_flag(args, "--ca")?;
+        let cert_path = required_flag(args, "--cert")?;
+        let key_path = required_flag(args, "--key")?;
+        let server_name_str = optional_flag(args, "--server-name").unwrap_or_else(|| {
+            // Match the SUBJECT_SERVER constant cosaci-protocol's
+            // TestCa stamps onto demo certs. Real operator deploys
+            // pass --server-name explicitly; this keeps the demo
+            // path single-arg.
+            "cosaci.local".to_string()
+        });
+        let admin_key_path = required_flag(args, "--admin-key")?;
+
+        let admin_seed_bytes =
+            fs::read(&admin_key_path).map_err(|e| format!("read {admin_key_path}: {e}"))?;
+        if admin_seed_bytes.len() < 32 {
+            return Err(format!(
+                "{admin_key_path}: admin key must be at least 32 bytes (raw ed25519 seed)"
+            ));
+        }
+        let mut seed = [0_u8; 32];
+        seed.copy_from_slice(&admin_seed_bytes[..32]);
+        let admin_kp = Keypair::from_seed(seed);
+
+        let client_cfg: Arc<ClientConfig> =
+            client_config_from_paths(&ca_path, &cert_path, &key_path)
+                .map_err(|e| format!("client config: {e}"))?;
+
+        let tcp = TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
+        tcp.set_nodelay(true)
+            .map_err(|e| format!("set_nodelay: {e}"))?;
+        let server_name: ServerName<'static> = ServerName::try_from(server_name_str.clone())
+            .map_err(|e| format!("server name {server_name_str}: {e}"))?;
+        let conn =
+            ClientConnection::new(client_cfg, server_name).map_err(|e| format!("rustls: {e}"))?;
+        let mut stream = ClientStream::new(conn, tcp);
+
+        // Send AdminHello.
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("clock: {e}"))?
+            .as_nanos() as u64;
+        let admin_pubkey = admin_kp.verifying_key().to_bytes();
+        let mut signed = Vec::with_capacity(ADMIN_HELLO_CHALLENGE.len() + 8);
+        signed.extend_from_slice(ADMIN_HELLO_CHALLENGE);
+        signed.extend_from_slice(&now_ns.to_le_bytes());
+        let signature = admin_kp.sign(&signed).to_bytes();
+
+        write_envelope(
+            &mut stream,
+            &Envelope::AdminHello {
+                admin_pubkey,
+                ts_unix_ns: now_ns,
+                signature,
+            },
+        )
+        .map_err(|e| format!("write AdminHello: {e}"))?;
+        match read_envelope(&mut stream).map_err(|e| format!("read welcome: {e}"))? {
+            Envelope::AdminWelcome => Ok(Self { stream }),
+            Envelope::AdminError { reason } => Err(format!("coord rejected hello: {reason}")),
+            other => Err(format!("unexpected hello response: {other:?}")),
+        }
+    }
+
+    fn request(mut self, env: Envelope) -> Result<Envelope, String> {
+        write_envelope(&mut self.stream, &env).map_err(|e| format!("write request: {e}"))?;
+        read_envelope(&mut self.stream).map_err(|e| format!("read response: {e}"))
+    }
 }

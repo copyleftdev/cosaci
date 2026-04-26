@@ -137,7 +137,88 @@ pub enum Envelope {
         /// Number of entries in the log.
         length: u64,
     },
+
+    // ── Admin wire protocol (issue #53 follow-on) ──────────────────────
+    /// Admin client → Coordinator: open an authenticated admin
+    /// session. The client carries its ed25519 signing pubkey, a
+    /// freshness timestamp, and a signature over the
+    /// [`ADMIN_HELLO_CHALLENGE`] || `ts.to_le_bytes()`. Coordinator
+    /// verifies (1) `SHA-256(pubkey)` is in the configured admin
+    /// allowlist, (2) `ts` is within the freshness window, and (3)
+    /// the signature verifies.
+    AdminHello {
+        /// Ed25519 verifying key of the admin client.
+        admin_pubkey: [u8; 32],
+        /// Wall-clock timestamp at hello time, unix ns.
+        ts_unix_ns: u64,
+        /// Signature over `[ADMIN_HELLO_CHALLENGE | ts_unix_ns.to_le_bytes()]`.
+        #[serde(with = "BigArray")]
+        signature: [u8; 64],
+    },
+    /// Coordinator's accept response to [`Envelope::AdminHello`].
+    AdminWelcome,
+    /// Coordinator's reject response to any admin envelope.
+    AdminError {
+        /// Short reason. v0.3 collapses signature/freshness/allowlist
+        /// failures into "unauthorized" (the deliberately-merged
+        /// shape that doesn't leak which admin keys are configured).
+        reason: String,
+    },
+    /// Admin → Coordinator: list the entries in the enrollment file
+    /// the coord was started with.
+    AdminListAgents,
+    /// Coordinator's response to [`Envelope::AdminListAgents`]. Each
+    /// entry is `(runner_id, signing_fp, vrf_fp, enrolled_at_unix_ns,
+    /// initial_reputation_thousandths)` — reputation is rendered as
+    /// `(reputation * 1000).round() as u32` for clean wire encoding.
+    AdminAgentList {
+        /// Records, sorted by `runner_id`.
+        entries: Vec<AdminAgentRecord>,
+    },
+    /// Admin → Coordinator: read the current Merkle log root + length.
+    /// Same shape as [`Envelope::GetLogRoot`] but routed through the
+    /// admin auth gate.
+    AdminGetLogRoot,
+    /// Coordinator's response to [`Envelope::AdminGetLogRoot`].
+    AdminLogRoot {
+        /// Current Merkle root over all `length` entries, or `None`
+        /// for an empty log.
+        root: Option<[u8; 32]>,
+        /// Number of entries in the log.
+        length: u64,
+    },
 }
+
+/// Wire shape of one admin-list-agents record. Mirrors the
+/// `cosaci-state::enrollment::EnrolledRecord` fields the admin CLI
+/// renders.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminAgentRecord {
+    /// Runner identifier.
+    pub runner_id: u64,
+    /// SHA-256 fingerprint of the runner's signing pubkey.
+    pub signing_fp: [u8; 32],
+    /// SHA-256 fingerprint of the runner's VRF pubkey.
+    pub vrf_fp: [u8; 32],
+    /// Unix-ns timestamp the operator recorded at enrollment time.
+    pub enrolled_at_unix_ns: i64,
+    /// Initial reputation, encoded as `(reputation * 1000).round() as u32`
+    /// (0..=1000 maps to 0.0..=1.0). Saturates at 1000.
+    pub initial_reputation_thousandths: u32,
+}
+
+/// Fixed challenge prefix the admin client signs with `ts_unix_ns`
+/// to authenticate. Binds the signature to the admin protocol so
+/// a leaked admin signature can't be replayed against another
+/// system that happens to use the same key for a different purpose.
+pub const ADMIN_HELLO_CHALLENGE: &[u8] = b"cosaci-admin-hello-v1";
+
+/// Default freshness window for [`Envelope::AdminHello`]'s
+/// `ts_unix_ns`, in nanoseconds. ±60s on either side of the coord's
+/// wall-clock — generous enough for clock skew between
+/// administrative hosts, tight enough that a captured hello can't
+/// be replayed days later.
+pub const ADMIN_HELLO_FRESHNESS_NS: u64 = 60 * 1_000_000_000;
 
 /// Maximum envelope payload size (16 MiB). Sized to accept real-world
 /// WASM modules (issue #6) while still bounding the damage a malformed
