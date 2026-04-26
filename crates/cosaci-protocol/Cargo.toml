@@ -25,6 +25,7 @@ tokio           = { workspace = true }
 tokio-rustls    = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal", "test-util"] }
 
 [lints]
