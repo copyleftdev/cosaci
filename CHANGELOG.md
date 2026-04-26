@@ -12,6 +12,50 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — webhook ingest algebra (#52, partial)
+
+- New workspace crate `cosaci-webhook` (10th workspace member).
+  Pure layer below the SCM webhook listener; no `tokio` /
+  `axum` / `hyper` deps. Two modules:
+  - `cosaci_webhook::signature` — `verify_github_signature`
+    (HMAC-SHA-256 of the raw body, header
+    `X-Hub-Signature-256: sha256=…`, constant-time via
+    `hmac::Mac::verify_slice`); `verify_gitlab_token`
+    (constant-time string compare against the configured
+    `X-Gitlab-Token`); `is_fresh(event_ts, now, window_secs)`
+    for replay-protection. Errors split between `Malformed`
+    (client bug — wrong prefix, non-hex, wrong length) and
+    `BadSignature` (active attack) so operator dashboards
+    can distinguish them. Empty header or empty configured
+    secret on the GitLab path is `Malformed` — a misconfigured
+    deploy must not silently accept everything.
+  - `cosaci_webhook::manifest` — serde-driven `.cosaci.toml`
+    parser with strict schema. `[tenant] id = N` is required;
+    `[[pipeline]]` entries carry name + on-events + step
+    list. Step variants are tag-discriminated (`type =
+    "source-fetch"` / `"exec-wasm"`); unknown discriminators
+    return `ManifestError::Schema` instead of silently
+    dropping the step.
+- New hypothesis card `hypotheses/webhook-auth-gate.md`
+  (class A, Tier 0). Property tests cover honest-signing
+  accepts, wrong-secret rejects, tampered-body rejects,
+  malformed-header rejects, GitLab token-equality boundaries,
+  freshness window in/out, and `parse(emit(m)) == m`
+  round-trip on Hegel-drawn manifests.
+- Workspace deps: `hmac` 0.13, `toml` 1.1.
+- **Out of scope (follow-on PR).** All three plumbing
+  acceptance criteria of #52 are deferred:
+  - HTTP listener bin (`axum` / `hyper` exposing
+    `POST /webhook/{github,gitlab}`).
+  - `.cosaci.toml` → signed `JobSubmission` translation
+    (resolving `{{ event.* }}` placeholders, building the
+    canonical payload, signing under the per-tenant key).
+  - Recorded-fixture integration test against real GitHub /
+    GitLab webhook bodies under `tests/fixtures/`.
+  The current property tests use synthetic bodies; recorded
+  fixtures land with the listener bin since they exercise
+  the `event.* → Pipeline` path.
+
 ### Added — concurrent-job-isolation algebra (#50, partial)
 
 - New hypothesis card `hypotheses/concurrent-job-isolation.md`
