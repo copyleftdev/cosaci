@@ -10,7 +10,71 @@ bumps. v1.0 onward, each crate versions independently.
 
 ## [Unreleased]
 
-In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
+Reserved for v0.4 work (concurrent-job runtime rewrite of the
+coordinator + agent async rewrite). The async wire primitives
+and TLS helpers shipped in v0.3 are the foundation; the
+coord-side rewrite that exploits them is the next milestone.
+
+## [0.3.0] — 2026-04-26
+
+**Production-ready binaries.** Every v0.3 P1/P2 issue closed
+with a passing falsifiable claim; remaining C-class
+infrastructure-blocked items (#36 netem, #37 swtpm) moved to
+v1.0.
+
+**Audit trail at release:** 35 A + 6 B-stat + 4 C + 3 D =
+**48 cards · 46 passing**. All A and B-stat cards: **41/41
+passing** with no deferred sub-claims. C: 2/4 passing
+(`mtls-enforcement`, `real-runtime-determinism`); the other
+two are infra-gated and live under v1.0 now. D: 3/3 passing.
+
+**v0.3 highlights** (per-issue PR refs in the entries below):
+
+- **End-to-end CI flow.** `webhook-listener → coordinator
+  --submit-stdin --tenants` pipe-stack works against
+  GitHub/GitLab webhooks, with HMAC verification, freshness
+  window, `.cosaci.toml` placeholder resolution, signed
+  per-tenant submissions, replay protection, per-tenant rate
+  limit, agent enrollment, capability-aware VRF committee,
+  WASM execution under fuel + memory limits, stake-weighted
+  quorum, slashing, Merkle-anchored attestation log,
+  retrievable bundles via mTLS read API, journaled crash
+  recovery.
+- **Operator surface.** `cosaci-admin` CLI in two modes:
+  filesystem-only (direct file manipulation) and
+  wire-protocol (mTLS + signed `AdminHello` to a running
+  coord with auto-reload of tenant registry on mutation).
+  RUNBOOK §1–§8 cover bootstrap → adding a runner → cert
+  rotation → CRL update → disaster recovery → debugging a
+  stuck job → slashing review → capacity planning.
+- **Deployment artifacts.** Dockerfile + Compose +
+  systemd units land the deploy story for non-Rust
+  operators.
+- **Observability foundation.** `tracing` +
+  `tracing-subscriber` everywhere; `RUST_LOG`-controlled
+  per-target verbosity; structured fields suitable for
+  later Prometheus / OTLP wiring.
+- **Tokio rewrite groundwork.** Async wire primitives
+  (`proto_async`) + tokio-rustls helpers (`tls_async`)
+  shipped with sync↔async compatibility tests; the
+  coord-side rewrite that uses them is the v0.4 milestone.
+
+**Out of scope (v0.4+):**
+- Coord-side async runtime rewrite (`bins/cosaci-coordinator`
+  still uses sync `std::net` + blocking envelope I/O even
+  though the async primitives are landed).
+- Agent-side async rewrite.
+- Real concurrent-job execution honoring
+  `--max-concurrent-jobs N > 1` (algebra verified by
+  `concurrent-job-isolation` card; runtime exploitation is
+  v0.4).
+- Mid-run fleet expansion (enrollment SIGHUP-reload would
+  have no effect since `accept_fleet` is one-shot).
+- Distributed replay/rate-limit across coordinator shards.
+- Prometheus + OTLP exporters (tracing emits the events;
+  the exporter is the wiring).
+
+---
 
 ### Added — async TLS helpers (#50 follow-on, PR 2 of N)
 
