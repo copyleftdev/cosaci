@@ -13,7 +13,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 
 ---
 
-## Tier 0 — Core algebra (26 cards, all A)
+## Tier 0 — Core algebra (27 cards, all A)
 
 | ID | § | Class | Status | Test | Depends_on |
 |---|---|---|---|---|---|
@@ -43,6 +43,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `concurrent-job-isolation` | §7.4 | A | **passing** | `tests/concurrent_job_isolation.rs` | quorum-math + merkle-log-append-only (#50, partial) |
 | `webhook-auth-gate` | §13.2 | A | **passing** | `tests/webhook_auth_gate.rs` | hmac 0.13 + toml 1.1 (#52, partial) |
 | `admin-auth-gate` | §13 (admin extension) | A | **passing** | `tests/admin_auth_gate.rs` | submission-auth-gate + mtls (#53 follow-on) |
+| `pipeline-submission` | §13 (v0.5 lift) / §6.2 | A | **passing** | `tests/submission_auth_gate.rs` | submission-auth-gate + pipeline-determinism (#106) |
 
 ## Tier 1 — Scale primitives (9 cards, all A)
 

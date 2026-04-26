@@ -83,6 +83,59 @@ pub fn canonical_bytes(payload: &JobSubmissionPayload) -> Result<Vec<u8>, String
     Ok(buf)
 }
 
+/// Pipeline-shaped submission payload (issue #106 — v0.5
+/// real-pipeline execution). Carries an arbitrary
+/// `cosaci_jobs::Pipeline` (multi-step: SourceFetch +
+/// ExecWasm + ExecNative + CaptureLog + CaptureArtifact)
+/// rather than the canned `(kind, a, b)` triple.
+///
+/// The pipeline is carried as **opaque CBOR bytes** rather
+/// than the typed `Pipeline` struct. Two reasons:
+///
+/// 1. **Layer separation.** The auth gate (`cosaci-state`)
+///    doesn't need to know about pipeline structure; the
+///    signature commits to the exact bytes the producer
+///    emitted, and the coord deserializes into `Pipeline`
+///    after the gate returns `Ok`. This keeps `cosaci-state`
+///    free of a `cosaci-jobs` dep (which would transitively
+///    pull in `cosaci-wasm` → `wasmtime` — a heavy footprint
+///    for an auth layer).
+/// 2. **Round-trip stability.** Ciborium produces canonical
+///    CBOR from a serde-derived struct; the producer's bytes
+///    are the verifier's bytes. The signing client builds
+///    the `Pipeline`, ciborium-encodes once, signs, and sends
+///    the same bytes the verifier decodes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipelineSubmissionPayload {
+    /// Tenant id this submission is signed under.
+    pub tenant_id: TenantId,
+    /// CBOR-encoded `cosaci_jobs::Pipeline`. Opaque to the
+    /// auth gate; the coord deserializes after verify.
+    pub pipeline_cbor: Vec<u8>,
+    /// Per-job deadline in seconds.
+    pub deadline_secs: u32,
+    /// Replay-protection nonce. Same shape and TTL semantics
+    /// as [`JobSubmissionPayload::nonce`].
+    pub nonce: u128,
+}
+
+/// Canonical signable bytes of a [`PipelineSubmissionPayload`].
+/// Same ciborium-once-shared-with-the-wire shape as
+/// [`canonical_bytes`].
+///
+/// # Errors
+///
+/// Returns an error if ciborium serialization fails (in
+/// practice unreachable for in-memory writers).
+pub fn canonical_bytes_pipeline(
+    payload: &PipelineSubmissionPayload,
+) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    ciborium::into_writer(payload, &mut buf)
+        .map_err(|e| format!("ciborium encode PipelineSubmissionPayload: {e}"))?;
+    Ok(buf)
+}
+
 /// Outcome of running the auth gate on one submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthCheck {
@@ -172,6 +225,63 @@ pub fn verify_and_admit<C: Clock>(
     }
 
     // Stage 4: rate limit. Consume one token per submission.
+    if !rate_limiter.accept_with_config(
+        payload.tenant_id,
+        1,
+        tenant.rate_capacity,
+        tenant.rate_refill_per_sec,
+    ) {
+        return AuthCheck::RateLimited;
+    }
+
+    AuthCheck::Ok
+}
+
+/// Pipeline-shaped variant of [`verify_and_admit`] (issue #106).
+///
+/// Same four-stage gate, same verdicts, same per-tenant
+/// replay scoping, same rate-limit semantics. Only difference:
+/// the signed canonical bytes come from
+/// [`canonical_bytes_pipeline`] instead of [`canonical_bytes`].
+///
+/// The two payload types share the auth surface — an attacker
+/// can't substitute a `JobSubmissionPayload` signature for a
+/// `PipelineSubmissionPayload` (or vice-versa) because their
+/// canonical encodings have different field tags, so the
+/// signed bytes differ.
+pub fn verify_and_admit_pipeline<C: Clock>(
+    payload: &PipelineSubmissionPayload,
+    pubkey: &[u8; 32],
+    signature: &[u8; 64],
+    now_ns: u64,
+    registry: &TenantRegistry,
+    rate_limiter: &mut RateLimiter<C>,
+    replay_guard: &mut ReplayGuard<C>,
+) -> AuthCheck {
+    let Some(tenant) = registry.get(payload.tenant_id) else {
+        return AuthCheck::UnknownTenant;
+    };
+
+    if fingerprint(pubkey) != tenant.signing_fp {
+        return AuthCheck::BadSignature;
+    }
+
+    let Ok(bytes) = canonical_bytes_pipeline(payload) else {
+        return AuthCheck::BadSignature;
+    };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(pubkey) else {
+        return AuthCheck::BadSignature;
+    };
+    let sig = Signature::from_bytes(signature);
+    if verify(&verifying_key, &bytes, &sig).is_err() {
+        return AuthCheck::BadSignature;
+    }
+
+    let replay_key = fold_replay_key(payload.tenant_id, payload.nonce);
+    if replay_guard.accept(replay_key, now_ns).is_err() {
+        return AuthCheck::ReplayDetected;
+    }
+
     if !rate_limiter.accept_with_config(
         payload.tenant_id,
         1,

@@ -9,7 +9,10 @@ use common::TestClock;
 use cosaci::rate_limit::RateLimiter;
 use cosaci::replay::ReplayGuard;
 use cosaci::signing::Keypair;
-use cosaci::submission_auth::{AuthCheck, JobSubmissionPayload, canonical_bytes, verify_and_admit};
+use cosaci::submission_auth::{
+    AuthCheck, JobSubmissionPayload, PipelineSubmissionPayload, canonical_bytes,
+    canonical_bytes_pipeline, verify_and_admit, verify_and_admit_pipeline,
+};
 use cosaci::tenant::{TenantRecord, TenantRegistry, fingerprint};
 use hegel::{TestCase, generators};
 
@@ -544,4 +547,117 @@ fn fresh_nonce_after_replay_still_accepts(tc: TestCase) {
         ),
         AuthCheck::Ok
     );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Property 9 — pipeline-shaped submission round-trips through the gate.
+//
+// Mirrors property 1 (well-formed submission admitted) but for the
+// `PipelineSubmissionPayload` shape introduced for v0.5 (#106).
+// The producer builds the payload, ciborium-encodes via
+// `canonical_bytes_pipeline`, signs, and submits. The gate must
+// admit on a clean nonce + valid signature + in-bucket rate limit.
+// ────────────────────────────────────────────────────────────────────────
+#[hegel::test]
+fn pipeline_well_formed_submission_is_admitted(tc: TestCase) {
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
+    let tenant_id = reg.iter().next().unwrap().tenant_id;
+    let pipeline_cbor: Vec<u8> = tc.draw(generators::binary().min_size(0).max_size(256));
+    let nonce: u128 = tc.draw(generators::integers::<u128>());
+    let payload = PipelineSubmissionPayload {
+        tenant_id,
+        pipeline_cbor,
+        deadline_secs: 60,
+        nonce,
+    };
+    let bytes = canonical_bytes_pipeline(&payload).expect("encode");
+    let sig = kp.sign(&bytes).to_bytes();
+    let pk = kp.verifying_key().to_bytes();
+
+    let verdict = verify_and_admit_pipeline(
+        &payload,
+        &pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
+    assert_eq!(verdict, AuthCheck::Ok);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Property 10 — JobSubmissionPayload signature ≠ PipelineSubmissionPayload signature.
+//
+// An attacker can't substitute a signed `JobSubmissionPayload` for a
+// `PipelineSubmissionPayload` with the same `tenant_id` + `nonce`.
+// The two payload types canonicalize to different bytes (different
+// CBOR field tags), so a signature over one fails to verify against
+// the other. This is the cross-shape unforgeability claim.
+// ────────────────────────────────────────────────────────────────────────
+#[hegel::test]
+fn legacy_signature_does_not_authorize_pipeline_payload(tc: TestCase) {
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
+    let tenant_id = reg.iter().next().unwrap().tenant_id;
+    let nonce: u128 = tc.draw(generators::integers::<u128>());
+    let pk = kp.verifying_key().to_bytes();
+
+    // Build + sign a legacy JobSubmissionPayload.
+    let legacy = JobSubmissionPayload {
+        tenant_id,
+        kind: "add".to_string(),
+        a: 1,
+        b: 2,
+        deadline_secs: 60,
+        nonce,
+    };
+    let legacy_bytes = canonical_bytes(&legacy).expect("encode legacy");
+    let legacy_sig = kp.sign(&legacy_bytes).to_bytes();
+
+    // Now construct a PipelineSubmissionPayload with the same
+    // tenant + nonce but submit the legacy signature.
+    let pipeline_payload = PipelineSubmissionPayload {
+        tenant_id,
+        pipeline_cbor: vec![0xa0], // arbitrary CBOR (empty map)
+        deadline_secs: 60,
+        nonce,
+    };
+
+    // The legacy signature MUST NOT verify against the pipeline
+    // payload's canonical bytes — the two encodings differ.
+    let verdict = verify_and_admit_pipeline(
+        &pipeline_payload,
+        &pk,
+        &legacy_sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
+    assert_eq!(verdict, AuthCheck::BadSignature);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Property 11 — pipeline payload canonical bytes are stable across
+// re-encodes. (Same shape as the existing `pipeline-determinism`
+// claim but for the submission wrapper.)
+// ────────────────────────────────────────────────────────────────────────
+#[hegel::test]
+fn pipeline_canonical_bytes_round_trip(tc: TestCase) {
+    let tenant_id: u64 = tc.draw(
+        generators::integers::<u64>()
+            .min_value(1)
+            .max_value(1_000_000),
+    );
+    let pipeline_cbor: Vec<u8> = tc.draw(generators::binary().min_size(0).max_size(512));
+    let nonce: u128 = tc.draw(generators::integers::<u128>());
+    let payload = PipelineSubmissionPayload {
+        tenant_id,
+        pipeline_cbor,
+        deadline_secs: 60,
+        nonce,
+    };
+    let b1 = canonical_bytes_pipeline(&payload).expect("encode 1");
+    let b2 = canonical_bytes_pipeline(&payload).expect("encode 2");
+    assert_eq!(b1, b2, "canonical_bytes_pipeline not stable across re-encodes");
 }
