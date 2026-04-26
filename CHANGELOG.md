@@ -12,6 +12,28 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — file-only `tenants` subcommand mirror (#46 follow-on)
+
+- `cosaci-admin tenants {list,add,revoke}` now support a
+  filesystem-mode flag (`--tenants <path>`) in addition to the
+  existing wire mode (`--coord <addr> ...`). Flag selection
+  matches the `agents` shape: `--coord` if present, else
+  `--tenants`.
+- File-mode `add` refuses on duplicate `tenant_id` (mirrors
+  `agents enroll`); file-mode `revoke` refuses if the id isn't
+  present. Same atomic-rename semantics as the agents path.
+- USAGE help in `cosaci-admin --help` lists the file-mode
+  tenants verbs alongside the agents file-mode verbs. Module-
+  level doc comment updated to document both modes.
+- New imports in `bins/cosaci-admin`:
+  `cosaci_state::tenant::{TenantRecord, TenantRegistry,
+  fingerprint_hex as tenant_fp_hex}`.
+- **Out of scope (follow-on).** `tenants` subcommand symmetry
+  was the last loose end from the admin wire-protocol PR
+  series (#93 → #94 → #95 → #96). The remaining v0.3
+  follow-on of meaningful size is the `tokio` runtime
+  rewrite for #50.
+
 ### Added — submission replay protection (#46 follow-on)
 
 - New `AuthCheck::ReplayDetected` verdict. Closes the

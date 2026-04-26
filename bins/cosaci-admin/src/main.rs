@@ -63,6 +63,7 @@ use cosaci_protocol::proto::{
 };
 use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_state::enrollment::{EnrolledRecord, EnrollmentSet, fingerprint_hex};
+use cosaci_state::tenant::{TenantRecord, TenantRegistry, fingerprint_hex as tenant_fp_hex};
 
 const USAGE: &str = "\
 cosaci-admin — administrative CLI for a CosaCI deployment
@@ -76,6 +77,12 @@ FILESYSTEM-MODE SUBCOMMANDS (operate on local files):
                     --signing-fp <hex64> --vrf-fp <hex64>
                     [--reputation <0.0..=1.0>] [--at <unix_ns>]
     agents revoke   --enrollment <path> --runner-id <u64>
+    tenants list    --tenants <path>
+    tenants add     --tenants <path> --tenant-id <u64>
+                    --signing-fp <hex64>
+                    --rate-capacity <u64> --rate-refill-per-sec <u64>
+                    [--at <unix_ns>]
+    tenants revoke  --tenants <path> --tenant-id <u64>
     log root        --log <path>
 
 WIRE-MODE SUBCOMMANDS (talk to a running coord; mutations take
@@ -376,9 +383,20 @@ fn agents_revoke_wire(args: &[String], addr: &str, runner_id: u64) -> Result<(),
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// tenants <verb>  (issue #46 + #53 follow-on; wire mode only — file-only
-// tenants management isn't shipped because the operator-facing CLI
-// path for tenants didn't exist before this PR).
+// tenants <verb>  (issue #46 + #53 follow-on)
+//
+// Two modes per verb (matching the agents/log shape):
+//   tenants list    --tenants <path>      → filesystem
+//   tenants list    --coord <addr> ...    → wire
+//   tenants add     --tenants <path> ...  → filesystem
+//   tenants add     --coord <addr> ...    → wire (auto-reloads coord)
+//   tenants revoke  --tenants <path> ...  → filesystem
+//   tenants revoke  --coord <addr> ...    → wire (auto-reloads coord)
+//
+// File mode mutates `tenants.txt` directly via the same atomic-
+// rename helper the agents path uses. Wire mode goes through the
+// signed-AdminHello session and the coord auto-reloads its
+// in-memory auth state on success.
 // ────────────────────────────────────────────────────────────────────────
 
 fn tenants_cmd(args: &[String]) -> Result<(), String> {
@@ -394,18 +412,42 @@ fn tenants_cmd(args: &[String]) -> Result<(), String> {
 }
 
 fn tenants_list(args: &[String]) -> Result<(), String> {
-    let addr = required_flag(args, "--coord")?;
-    let conn = AdminWireConn::connect(args, &addr)?;
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return tenants_list_wire(args, &addr);
+    }
+    let path = required_flag(args, "--tenants")?;
+    let reg = TenantRegistry::load_from_path(&path).map_err(|e| format!("load {path}: {e}"))?;
+    if reg.is_empty() {
+        println!("(no tenants registered in {path})");
+        return Ok(());
+    }
+    print_tenants_header();
+    for r in reg.iter() {
+        let s_short = &tenant_fp_hex(&r.signing_fp)[..16];
+        println!(
+            "{:<10}  {:<16}  {:>10}  {:>14}  {:>22}",
+            r.tenant_id, s_short, r.rate_capacity, r.rate_refill_per_sec, r.registered_at_unix_ns
+        );
+    }
+    Ok(())
+}
+
+fn print_tenants_header() {
+    println!(
+        "{:<10}  {:<16}  {:>10}  {:>14}  {:>22}",
+        "tenant_id", "signing_fp", "capacity", "refill_per_s", "registered_at"
+    );
+}
+
+fn tenants_list_wire(args: &[String], addr: &str) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
     match conn.request(Envelope::AdminListTenants)? {
         Envelope::AdminTenantList { mut entries } => {
             if entries.is_empty() {
                 println!("(no tenants registered per coord at {addr})");
                 return Ok(());
             }
-            println!(
-                "{:<10}  {:<16}  {:>10}  {:>14}  {:>22}",
-                "tenant_id", "signing_fp", "capacity", "refill_per_s", "registered_at"
-            );
+            print_tenants_header();
             entries.sort_by_key(|r| r.tenant_id);
             for r in entries {
                 let s_short = &fingerprint_hex(&r.signing_fp)[..16];
@@ -426,7 +468,6 @@ fn tenants_list(args: &[String]) -> Result<(), String> {
 }
 
 fn tenants_add(args: &[String]) -> Result<(), String> {
-    let addr = required_flag(args, "--coord")?;
     let tenant_id: u64 = required_flag(args, "--tenant-id")?
         .parse()
         .map_err(|e| format!("--tenant-id: {e}"))?;
@@ -445,7 +486,61 @@ fn tenants_add(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("--at: {e}"))?
         .unwrap_or_else(|| now_unix_ns().max(0) as u64);
 
-    let conn = AdminWireConn::connect(args, &addr)?;
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return tenants_add_wire(
+            args,
+            &addr,
+            tenant_id,
+            signing_fp,
+            rate_capacity,
+            rate_refill_per_sec,
+            registered_at_unix_ns,
+        );
+    }
+
+    let path = required_flag(args, "--tenants")?;
+    let existing = if Path::new(&path).exists() {
+        TenantRegistry::load_from_path(&path).map_err(|e| format!("load {path}: {e}"))?
+    } else {
+        TenantRegistry::new()
+    };
+    if existing.get(tenant_id).is_some() {
+        return Err(format!(
+            "tenant_id {tenant_id} is already registered in {path}; revoke first if you mean to replace"
+        ));
+    }
+    // Validate the record by round-tripping through TenantRecord
+    // first; this catches obvious operator typos before the
+    // file is written.
+    let _record = TenantRecord {
+        tenant_id,
+        signing_fp,
+        rate_capacity,
+        rate_refill_per_sec,
+        registered_at_unix_ns,
+    };
+    let line = format!(
+        "{tenant_id} {} {rate_capacity} {rate_refill_per_sec} {registered_at_unix_ns}",
+        tenant_fp_hex(&signing_fp),
+    );
+    append_atomic(&path, &line).map_err(|e| format!("append to {path}: {e}"))?;
+    println!(
+        "added tenant {tenant_id} (signing_fp[..8]={}, capacity={rate_capacity}, refill={rate_refill_per_sec}/s)",
+        &tenant_fp_hex(&signing_fp)[..16],
+    );
+    Ok(())
+}
+
+fn tenants_add_wire(
+    args: &[String],
+    addr: &str,
+    tenant_id: u64,
+    signing_fp: [u8; 32],
+    rate_capacity: u64,
+    rate_refill_per_sec: u64,
+    registered_at_unix_ns: u64,
+) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
     match conn.request(Envelope::AdminAddTenant {
         tenant_id,
         signing_fp,
@@ -467,11 +562,47 @@ fn tenants_add(args: &[String]) -> Result<(), String> {
 }
 
 fn tenants_revoke(args: &[String]) -> Result<(), String> {
-    let addr = required_flag(args, "--coord")?;
     let tenant_id: u64 = required_flag(args, "--tenant-id")?
         .parse()
         .map_err(|e| format!("--tenant-id: {e}"))?;
-    let conn = AdminWireConn::connect(args, &addr)?;
+    if let Some(addr) = optional_flag(args, "--coord") {
+        return tenants_revoke_wire(args, &addr, tenant_id);
+    }
+    let path = required_flag(args, "--tenants")?;
+    if !Path::new(&path).exists() {
+        return Err(format!("{path} does not exist; nothing to revoke"));
+    }
+    let original = fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
+    let mut found = false;
+    let mut out = String::with_capacity(original.len());
+    for line in original.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let id_str = trimmed.split_whitespace().next().unwrap_or("");
+        match id_str.parse::<u64>() {
+            Ok(id) if id == tenant_id => {
+                found = true;
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    if !found {
+        return Err(format!("tenant_id {tenant_id} not found in {path}"));
+    }
+    write_atomic(&path, &out).map_err(|e| format!("write {path}: {e}"))?;
+    println!("revoked tenant {tenant_id} from {path}");
+    Ok(())
+}
+
+fn tenants_revoke_wire(args: &[String], addr: &str, tenant_id: u64) -> Result<(), String> {
+    let conn = AdminWireConn::connect(args, addr)?;
     match conn.request(Envelope::AdminRevokeTenant { tenant_id })? {
         Envelope::AdminRevokeTenantAck => {
             println!("revoked tenant {tenant_id} on coord at {addr}");
