@@ -9,4 +9,5 @@
 //! `rustls-pemfile`) are isolated here.
 
 pub mod proto;
+pub mod proto_async;
 pub mod tls;

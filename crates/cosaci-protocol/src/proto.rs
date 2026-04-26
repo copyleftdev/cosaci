@@ -302,24 +302,25 @@ pub const ADMIN_HELLO_FRESHNESS_NS: u64 = 60 * 1_000_000_000;
 
 /// Maximum envelope payload size (16 MiB). Sized to accept real-world
 /// WASM modules (issue #6) while still bounding the damage a malformed
-/// length prefix can do (vs. a 4 GiB allocation if unbounded).
-const MAX_ENVELOPE_BYTES: usize = 16 << 20;
+/// length prefix can do (vs. a 4 GiB allocation if unbounded). Exposed
+/// (`_PUB` suffix) so the async path in `proto_async` can share it.
+pub const MAX_ENVELOPE_BYTES_PUB: usize = 16 << 20;
 
 /// Write an `Envelope` as `[4 byte BE length][CBOR bytes]`.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the underlying writer fails, or
-/// `InvalidData` if the encoded envelope exceeds `MAX_ENVELOPE_BYTES`.
+/// `InvalidData` if the encoded envelope exceeds `MAX_ENVELOPE_BYTES_PUB`.
 pub fn write_envelope<W: Write>(w: &mut W, env: &Envelope) -> std::io::Result<()> {
     let mut buf = Vec::new();
     ciborium::into_writer(env, &mut buf).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("cbor encode: {e}"))
     })?;
-    if buf.len() > MAX_ENVELOPE_BYTES {
+    if buf.len() > MAX_ENVELOPE_BYTES_PUB {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("envelope {} > max {}", buf.len(), MAX_ENVELOPE_BYTES),
+            format!("envelope {} > max {}", buf.len(), MAX_ENVELOPE_BYTES_PUB),
         ));
     }
     let len = buf.len() as u32;
@@ -334,16 +335,16 @@ pub fn write_envelope<W: Write>(w: &mut W, env: &Envelope) -> std::io::Result<()
 /// # Errors
 ///
 /// Returns an I/O error if the underlying reader fails, `InvalidData`
-/// if the length prefix declares more than `MAX_ENVELOPE_BYTES`, or
+/// if the length prefix declares more than `MAX_ENVELOPE_BYTES_PUB`, or
 /// `InvalidData` if the CBOR payload fails to decode.
 pub fn read_envelope<R: Read>(r: &mut R) -> std::io::Result<Envelope> {
     let mut len_bytes = [0_u8; 4];
     r.read_exact(&mut len_bytes)?;
     let len = u32::from_be_bytes(len_bytes) as usize;
-    if len > MAX_ENVELOPE_BYTES {
+    if len > MAX_ENVELOPE_BYTES_PUB {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("incoming envelope declared {len} bytes > max {MAX_ENVELOPE_BYTES}"),
+            format!("incoming envelope declared {len} bytes > max {MAX_ENVELOPE_BYTES_PUB}"),
         ));
     }
     let mut buf = vec![0_u8; len];
