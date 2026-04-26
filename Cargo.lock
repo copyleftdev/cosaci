@@ -446,6 +446,7 @@ dependencies = [
 name = "cosaci-state"
 version = "0.2.0"
 dependencies = [
+ "ciborium",
  "cosaci-core",
  "serde",
  "serde_json",

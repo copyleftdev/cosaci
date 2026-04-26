@@ -161,12 +161,39 @@ the queue drains, the loop exits, agents are sent `Shutdown`, and
 the coord exits 0. SIGTERM still works as the unconditional
 drain-and-exit signal regardless of stdin state.
 
+**Authenticated submissions (issue #46).** When `--tenants <path>`
+is set, the coord enforces per-tenant ed25519-signed submissions
+with a per-tenant token-bucket rate limit. The submission shape
+gains four required fields:
+
+```bash
+# tenants.txt — one record per line, whitespace-separated.
+#   tenant_id  signing_fp_hex                                                    capacity refill_per_sec  registered_at_unix_ns
+1            abcd...                                                            100      10              1700000000000000000
+
+# A signed submission line:
+{"kind":"add","a":1,"b":2,"deadline_secs":60,
+ "tenant_id":1,"nonce":12345,
+ "pubkey_hex":"<32-byte ed25519 pubkey, lowercase hex>",
+ "signature_hex":"<64-byte sig over CBOR(JobSubmissionPayload), lowercase hex>"}
+```
+
+The coord rejects (and logs) submissions with `UnknownTenant` /
+`BadSignature` / `RateLimited` verdicts. Failed-auth submissions
+do **not** consume tokens — an attacker cannot drain a legit
+tenant's bucket by spamming forged signatures. To produce a valid
+`signature_hex`, the client builds a `JobSubmissionPayload`
+matching the wire fields (see
+`crates/cosaci-state/src/submission_auth.rs`), CBOR-encodes it via
+`canonical_bytes`, and ed25519-signs the bytes.
+
 > **Out of scope for v0.3 (follow-on).** A Unix-socket / REST
 > alternative to stdin (so an external producer can submit
-> without owning coord's stdin handle), per-tenant signed
-> submission tokens (issue #46), and arbitrary module bytes on
-> the wire (issue #40). The stdin path is the smallest interface
-> that proves the queue + loop are correct end-to-end.
+> without owning coord's stdin handle); arbitrary module bytes on
+> the wire (issue #40); replay-protection enforcement on `nonce`
+> (the field is signed but uniqueness isn't yet enforced via the
+> bloom filter); a `cosaci-admin tenants` subcommand (operator
+> hand-edits `tenants.txt` and restarts coord today).
 
 ---
 

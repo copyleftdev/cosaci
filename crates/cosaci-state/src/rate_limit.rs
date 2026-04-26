@@ -92,6 +92,30 @@ impl<C: Clock> RateLimiter<C> {
         bucket.try_consume(cost, now)
     }
 
+    /// Attempt to admit a request of `cost` tokens for `tenant` using
+    /// per-tenant `(capacity, refill_per_sec)` rather than the
+    /// limiter's defaults. The tenant's bucket is initialized from
+    /// `(capacity, refill_per_sec)` on first sight; subsequent calls
+    /// retain whatever balance is already in the bucket — so a
+    /// subsequent call with different config does **not** resize the
+    /// bucket. This matches the v0.3 model where tenant rate config
+    /// is loaded from the registry at coord startup and is stable for
+    /// the lifetime of the process.
+    pub fn accept_with_config(
+        &mut self,
+        tenant: TenantId,
+        cost: u64,
+        capacity: u64,
+        refill_per_sec: u64,
+    ) -> bool {
+        let now = self.clock.now_ns();
+        let bucket = self
+            .buckets
+            .entry(tenant)
+            .or_insert_with(|| TokenBucket::new(capacity, refill_per_sec, now));
+        bucket.try_consume(cost, now)
+    }
+
     /// Current token balance for `tenant` (after refill). A never-seen
     /// tenant returns `default_capacity` (its bucket would be fresh).
     pub fn tokens_of(&mut self, tenant: TenantId) -> u64 {
