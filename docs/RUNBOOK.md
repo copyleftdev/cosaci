@@ -195,6 +195,74 @@ matching the wire fields (see
 > bloom filter); a `cosaci-admin tenants` subcommand (operator
 > hand-edits `tenants.txt` and restarts coord today).
 
+### 1f. Webhook listener (issue #52 follow-on)
+
+For SCM-driven CI, run `webhook-listener` alongside the
+coordinator and pipe its stdout into coord's stdin:
+
+```bash
+# /etc/cosaci/.cosaci.toml — per-deploy manifest, mirrors what
+# upstream repos would commit at their root.
+[tenant]
+id = 1
+
+[[pipeline]]
+name = "ci"
+on   = ["pull_request.synchronize", "push"]
+
+  [[pipeline.step]]
+  type        = "exec-wasm"
+  module_path = "build/ci.wasm"
+  args_cbor_hex = "8201a182183c"
+
+# /etc/cosaci/tenant.seed — 32-byte raw ed25519 seed; the matching
+# pubkey fingerprint goes into tenants.txt.
+sudo install -m 0400 -o cosaci -g cosaci tenant.seed /etc/cosaci/tenant.seed
+
+# /etc/cosaci/github.secret — shared HMAC secret you configure on
+# GitHub's webhook page. One line, no trailing newline.
+echo -n "<github webhook secret>" | sudo tee /etc/cosaci/github.secret
+
+# Run the pipe. The listener verifies HMAC + freshness, resolves
+# `{{ event.* }}` placeholders, signs each matching submission
+# under tenant.seed, and writes one NDJSON line to stdout per
+# triggered pipeline. The coord's --submit-stdin path consumes them.
+webhook-listener \
+    --addr 0.0.0.0:8080 \
+    --github-secret /etc/cosaci/github.secret \
+    --tenant-id 1 \
+    --tenant-key /etc/cosaci/tenant.seed \
+    --manifest /etc/cosaci/.cosaci.toml \
+  | coordinator \
+    --addr 0.0.0.0:7878 \
+    --ca /etc/cosaci/ca.pem \
+    --cert /etc/cosaci/server.pem \
+    --key  /etc/cosaci/server.key.pem \
+    --enrollment /etc/cosaci/enrollment.txt \
+    --tenants    /etc/cosaci/tenants.txt \
+    --submit-stdin \
+    --queue-cap 256
+```
+
+GitHub returns of `202 accepted (N submission(s))` confirm the
+pipe handed N lines to coord; `401 unauthorized` is a bad HMAC
+(check the configured secret); `400 bad request` is malformed
+JSON or missing headers; `500 internal error` is a manifest /
+translate failure (check listener stderr).
+
+**TLS.** The listener doesn't terminate TLS itself (no v0.3
+follow-on dep on `rustls`). Front it with nginx / Caddy and
+use the SCM provider's pinned-CA option for the upstream leg.
+
+> **Out of scope for v0.3 (follow-on).** Per-tenant manifest
+> routing (one listener serves one tenant today); SCM
+> delivery-retry handling (a 5xx is the provider's problem;
+> there's no listener-side retry queue); arbitrary submitted
+> pipelines (today the listener reduces resolved pipelines
+> to the canned `(kind, a, b)` shape — full pipeline
+> submission lands when the coord switches to non-canned
+> modules).
+
 ---
 
 ## 2. Adding a runner

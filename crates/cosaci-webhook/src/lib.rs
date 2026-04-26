@@ -14,9 +14,11 @@
 
 pub mod manifest;
 pub mod signature;
+pub mod translate;
 
 pub use manifest::{CosaciToml, ManifestError, parse_manifest};
 pub use signature::{
     GITHUB_SIGNATURE_HEADER, GITLAB_TOKEN_HEADER, SignatureError, is_fresh,
     verify_github_signature, verify_gitlab_token,
 };
+pub use translate::{ResolvedPipeline, ResolvedStep, TranslateError, translate};

@@ -1,0 +1,29 @@
+[package]
+name        = "cosaci-webhook-listener"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+description = "CosaCI webhook listener — verifies GitHub/GitLab signatures, resolves .cosaci.toml, emits signed JobSubmission lines for the coordinator's --submit-stdin path"
+readme      = "../../README.md"
+keywords    = ["distributed", "ci", "webhook", "github", "gitlab"]
+categories  = ["command-line-utilities", "network-programming"]
+publish     = false
+
+[dependencies]
+cosaci-core    = { path = "../../crates/cosaci-core" }
+cosaci-state   = { path = "../../crates/cosaci-state" }
+cosaci-webhook = { path = "../../crates/cosaci-webhook" }
+ciborium       = { workspace = true }
+serde_json     = { workspace = true }
+tiny_http      = { workspace = true }
+tracing        = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "webhook-listener"
+path = "src/main.rs"
+
+[lints]
+workspace = true
