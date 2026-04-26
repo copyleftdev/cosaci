@@ -19,6 +19,8 @@ cosaci-state    = { path = "../../crates/cosaci-state" }
 cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
 cosaci-wasm        = { path = "../../crates/cosaci-wasm" }
 rustls             = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
 signal-hook        = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }

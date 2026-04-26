@@ -14,11 +14,15 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::io::BufRead;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::Deserialize;
 
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
@@ -37,6 +41,31 @@ use cosaci_state::journal::{Journal, JournalEntry, JournalOutcome, reconstruct_s
 use cosaci_state::stake_ledger::StakeLedger;
 use cosaci_vrf::vrf::verify as vrf_verify;
 use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_args};
+
+/// One job submission read from stdin (issue #32). NDJSON wire shape:
+/// `{"kind":"add","a":1,"b":2}` (deadline_secs optional, defaults
+/// to 60). v0.3 dispatches `kind` to a canned WASM module — once
+/// the deterministic source-fetching step (#40) lands, submissions
+/// will carry arbitrary module bytes + args_cbor + a pipeline.
+#[derive(Debug, Clone, Deserialize)]
+struct JobSubmission {
+    kind: JobKind,
+    a: i32,
+    b: i32,
+    #[serde(default = "default_deadline_secs")]
+    deadline_secs: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum JobKind {
+    Add,
+    Mul,
+}
+
+fn default_deadline_secs() -> u32 {
+    60
+}
 
 /// Atomic-swap holder for the current `ServerConfig`. SIGHUP triggers
 /// a re-read of the cert/key/CRL paths and an atomic replacement here.
@@ -118,6 +147,22 @@ fn main() -> std::io::Result<()> {
     let slash_fraction: f32 = arg_or(&args, "--slash-fraction", "0.25")
         .parse()
         .expect("slash-fraction f32");
+    // `--submit-stdin` (issue #32): read NDJSON `JobSubmission`
+    // records from stdin, push them to a bounded queue, and have
+    // the job loop pull from the queue instead of round-robining
+    // canned `add` / `mul`. Empty stdin = no jobs (coord exits
+    // after fleet assembly). Closed stdin + drained queue = clean
+    // shutdown. Default off preserves the legacy canned behavior.
+    let submit_stdin = args.iter().any(|a| a == "--submit-stdin");
+    // `--queue-cap N` (issue #32): bounded queue capacity for
+    // stdin submissions. On overflow the reader logs a warning and
+    // drops the record (reject-rather-than-block — the documented
+    // backpressure policy). Default 64 — large enough to absorb a
+    // burst of CI events, small enough to fail loudly under
+    // sustained overload.
+    let queue_cap: usize = arg_or(&args, "--queue-cap", "64")
+        .parse()
+        .expect("queue-cap usize");
 
     let enrollment: Option<Arc<EnrollmentSet>> = if enrollment_path.is_empty() {
         None
@@ -241,16 +286,68 @@ fn main() -> std::io::Result<()> {
         tracing::info!("[coordinator] read API listening on {read_addr} (mTLS)");
     }
 
+    // Stdin submission queue (issue #32). Only initialized when
+    // `--submit-stdin` was given. The reader thread closes the
+    // sender when stdin EOFs; the main loop's `recv` returns Err
+    // and the coord drains.
+    let submission_rx = if submit_stdin {
+        let (tx, rx) = sync_channel::<JobSubmission>(queue_cap);
+        spawn_stdin_reader(tx);
+        tracing::info!(
+            "[coordinator] --submit-stdin enabled (queue cap {queue_cap}); reading NDJSON job submissions from stdin"
+        );
+        Some(rx)
+    } else {
+        None
+    };
+
     let mut completed: u64 = 0;
 
-    while completed < max_jobs && !draining.load(Ordering::Relaxed) {
+    'outer: while completed < max_jobs && !draining.load(Ordering::Relaxed) {
         let job_id = completed + 1;
-        let module = if job_id % 2 == 1 {
-            &add_wasm
+        let (module, args) = if let Some(rx) = submission_rx.as_ref() {
+            // Stdin-submitted jobs (issue #32). `recv_timeout` lets
+            // the loop notice SIGTERM/SIGINT between submissions
+            // instead of blocking forever on an idle stdin.
+            let sub = loop {
+                if draining.load(Ordering::Relaxed) {
+                    break 'outer;
+                }
+                match rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(sub) => break sub,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        tracing::info!(
+                            "[coordinator] stdin closed and queue drained — shutting down"
+                        );
+                        break 'outer;
+                    }
+                }
+            };
+            tracing::info!(
+                "[coordinator] job {job_id} submitted: kind={:?} a={} b={} deadline_secs={}",
+                sub.kind,
+                sub.a,
+                sub.b,
+                sub.deadline_secs
+            );
+            let module = match sub.kind {
+                JobKind::Add => &add_wasm,
+                JobKind::Mul => &mul_wasm,
+            };
+            let args = encode_args(sub.a, sub.b).expect("encode args");
+            (module, args)
         } else {
-            &mul_wasm
+            // Legacy: round-robin canned add/mul with the
+            // `--a` / `--b` flag pair.
+            let module = if job_id % 2 == 1 {
+                &add_wasm
+            } else {
+                &mul_wasm
+            };
+            let args = encode_args(job_a, job_b).expect("encode args");
+            (module, args)
         };
-        let args = encode_args(job_a, job_b).expect("encode args");
         let pipeline = cosaci_jobs::Pipeline {
             steps: vec![cosaci_jobs::Step::ExecWasm {
                 module: module.clone(),
@@ -772,6 +869,67 @@ fn hex_lower(bytes: &[u8]) -> String {
         write!(&mut s, "{b:02x}").expect("write to String");
     }
     s
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Stdin submission reader (issue #32)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spawn a daemon thread that reads NDJSON `JobSubmission` records
+/// from stdin and pushes them to the bounded queue. Each line is
+/// parsed independently — a malformed line is logged and skipped,
+/// so a single typo in a submission file doesn't abort the stream.
+///
+/// On a full queue, `try_send` returns `Full` and we log + drop the
+/// record (reject-rather-than-block; documented backpressure
+/// policy). When stdin EOFs, the thread drops the sender so the
+/// main loop's `recv_timeout` returns `Disconnected` and the
+/// coordinator drains.
+fn spawn_stdin_reader(tx: SyncSender<JobSubmission>) {
+    thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let reader = stdin.lock();
+        for (lineno, line) in reader.lines().enumerate() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::warn!("[coordinator] stdin read error at line {}: {e}", lineno + 1);
+                    break;
+                }
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let sub: JobSubmission = match serde_json::from_str(trimmed) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        "[coordinator] stdin line {} rejected: {e} (line: {trimmed})",
+                        lineno + 1
+                    );
+                    continue;
+                }
+            };
+            match tx.try_send(sub) {
+                Ok(()) => {}
+                Err(TrySendError::Full(dropped)) => {
+                    tracing::warn!(
+                        "[coordinator] submission queue full, dropping record (kind={:?} a={} b={}); raise --queue-cap or slow producers",
+                        dropped.kind,
+                        dropped.a,
+                        dropped.b
+                    );
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    tracing::warn!("[coordinator] submission receiver gone; stopping reader");
+                    return;
+                }
+            }
+        }
+        tracing::info!("[coordinator] stdin EOF; submission reader exiting");
+        // Dropping `tx` here closes the channel.
+    });
 }
 
 // ────────────────────────────────────────────────────────────────────────

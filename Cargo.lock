@@ -382,6 +382,8 @@ dependencies = [
  "cosaci-vrf",
  "cosaci-wasm",
  "rustls",
+ "serde",
+ "serde_json",
  "signal-hook",
  "tracing",
  "tracing-subscriber",
