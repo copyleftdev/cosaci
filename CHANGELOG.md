@@ -12,6 +12,58 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — async wire-protocol primitives (#50 follow-on, PR 1 of N)
+
+Groundwork for the `tokio` runtime rewrite of the coordinator
+(issue #50). Ships the async wire-protocol primitives + their
+sync-compatibility tests; the actual coord rewrite is the
+next PR.
+
+- New `cosaci_protocol::proto_async` module with two
+  functions:
+  - `write_envelope_async<W: AsyncWrite + Unpin>(w, env)`
+  - `read_envelope_async<R: AsyncRead + Unpin>(r) -> Envelope`
+  Identical framing to the sync path
+  (`[4-byte BE length][CBOR bytes]`, `MAX_ENVELOPE_BYTES_PUB`
+  cap). Uses `tokio::io::{AsyncReadExt, AsyncWriteExt}` for
+  the I/O.
+- The previously-private `MAX_ENVELOPE_BYTES` is now public
+  as `MAX_ENVELOPE_BYTES_PUB` so the async path can share
+  it without copying.
+- New per-crate integration test
+  `crates/cosaci-protocol/tests/wire_async_compat.rs`
+  (6 tests):
+  - `sync_write_produces_same_bytes_as_async_write` —
+    byte-equality of the two writers for a sample
+    envelope zoo.
+  - `sync_write_async_read_roundtrips` — sync writer ↔ async
+    reader interop.
+  - `async_write_sync_read_roundtrips` — async writer ↔ sync
+    reader interop.
+  - `async_write_async_read_roundtrips` — full async
+    round-trip.
+  - `async_read_on_truncated_stream_returns_eof` — error
+    shape on partial frame matches sync (`UnexpectedEof`).
+  - `async_write_rejects_oversize_envelope` — over-cap
+    envelopes return `InvalidData` like the sync path.
+  These together prove **a sync writer can talk to an async
+  reader and vice-versa**, which is what lets the eventual
+  tokio rewrite of the coord inter-operate on-the-wire with
+  today's sync agents / webhook listener / cosaci-admin
+  during a gradual cut-over (no flag-day migration needed).
+- New deps in `cosaci-protocol`: `tokio` (workspace,
+  default-feature-set: rt + rt-multi-thread + net + io-util
+  + time + macros + sync + signal), `tokio-rustls` 0.26
+  (workspace; ring-only feature, matches the existing
+  rustls 0.23 ring backend). New workspace deps only —
+  every other crate keeps its existing dep set.
+- **Out of scope (next PR).** The coord-side rewrite itself
+  (`async fn run_one_job`, `tokio::sync::Mutex` for shared
+  state, `--max-concurrent-jobs` honored, demo bumped from
+  3 sequential jobs to a 16-job burst, criterion bench).
+  This PR is the foundation; nothing here changes coord
+  behavior on its own.
+
 ### Added — file-only `tenants` subcommand mirror (#46 follow-on)
 
 - `cosaci-admin tenants {list,add,revoke}` now support a

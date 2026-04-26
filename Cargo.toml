@@ -111,6 +111,8 @@ signal-hook      = "0.3.18"
 tempfile         = "3.21"
 time             = { version = "0.3", default-features = false, features = ["std"] }
 tiny_http        = "0.12.0"
+tokio            = { version = "1.52.1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal"] }
+tokio-rustls     = { version = "0.26.4", default-features = false, features = ["ring"] }
 toml             = "1.1.2"
 tracing          = { version = "0.1.41", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "env-filter"] }

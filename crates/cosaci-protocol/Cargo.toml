@@ -21,6 +21,11 @@ rustls-pemfile  = { workspace = true }
 serde           = { workspace = true }
 serde-big-array = { workspace = true }
 time            = { workspace = true }
+tokio           = { workspace = true }
+tokio-rustls    = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal", "test-util"] }
 
 [lints]
 workspace = true
