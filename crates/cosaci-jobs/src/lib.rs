@@ -24,7 +24,10 @@
 //! # v0.3 step coverage
 //!
 //! - [`Step::ExecWasm`] — implemented (delegates to `cosaci-wasm`).
-//! - [`Step::SourceFetch`] — types defined; executor lands in issue #40.
+//! - [`Step::SourceFetch`] — implemented (issue #40, shells out to
+//!   `git`; falls back to `StepStatus::Failed` if `git` isn't on
+//!   `PATH`). Tree hashing is the deterministic core under
+//!   `hypotheses/source-fetch-determinism.md`.
 //! - [`Step::ExecNative`] — types defined; executor + sandbox lands in
 //!   issues #43 (resource limits) + #54 (egress policy).
 //! - [`Step::CaptureLog`] / [`Step::CaptureArtifact`] — types defined;
@@ -44,7 +47,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub mod network;
+pub mod source_fetch;
 pub use network::NetworkPolicy;
+pub use source_fetch::{SourceFetchError, SourceFetchOutput};
 
 /// Fuel-units-per-cpu-second translation factor for WASM execution
 /// (issue #43). One fuel unit ≈ one wasmtime instruction; modern x86
@@ -291,7 +296,9 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
                 args_cbor,
                 limits,
             } => execute_wasm_step(step_index, module, args_cbor, limits.clone(), step)?,
-            Step::SourceFetch { .. } => not_implemented(step_index, step, StepKind::SourceFetch),
+            Step::SourceFetch { url, reference } => {
+                execute_source_fetch_step(step_index, url, reference, step)
+            }
             Step::ExecNative { .. } => not_implemented(step_index, step, StepKind::ExecNative),
             Step::CaptureLog { .. } => not_implemented(step_index, step, StepKind::CaptureLog),
             Step::CaptureArtifact { .. } => {
@@ -306,6 +313,49 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
         steps: step_outputs,
         final_artifact_hash,
     })
+}
+
+fn execute_source_fetch_step(
+    step_index: u32,
+    url: &str,
+    reference: &str,
+    step: &Step,
+) -> StepOutput {
+    match source_fetch::execute_source_fetch(url, reference) {
+        Ok(out) => StepOutput {
+            step_index,
+            status: StepStatus::Success,
+            output_hash: source_fetch::output_hash(&out),
+        },
+        Err(e) => {
+            // Propagate as a Failed step with a deterministic
+            // output_hash binding (step canonical bytes, error
+            // discriminant). Two runners that hit the same
+            // failure on the same step produce equal hashes.
+            let detail = format!("source_fetch step {step_index} failed: {e}");
+            let kind_id = match &e {
+                SourceFetchError::GitNotFound => 0_u8,
+                SourceFetchError::CloneFailed(_) => 1,
+                SourceFetchError::CheckoutFailed(_) => 2,
+                SourceFetchError::ResolveFailed(_) => 3,
+                SourceFetchError::Io(_) => 4,
+            };
+            tracing_workaround_warn(&detail);
+            StepOutput {
+                step_index,
+                status: StepStatus::Failed,
+                output_hash: hash_canonical(&(step, kind_id)),
+            }
+        }
+    }
+}
+
+/// Local stand-in for `tracing::warn!` since `cosaci-jobs` doesn't
+/// pull `tracing` (keeps the lib `#![forbid(unsafe_code)]` deps
+/// minimal). Writes to stderr; the coord's tracing fmt subscriber
+/// captures it via `journalctl`.
+fn tracing_workaround_warn(msg: &str) {
+    eprintln!("[cosaci-jobs] {msg}");
 }
 
 fn execute_wasm_step(

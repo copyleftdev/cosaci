@@ -5,6 +5,8 @@
 //! whole trust chain — if two runners can disagree on a `PipelineResult`
 //! for the same `Pipeline`, every downstream property collapses.
 
+use std::collections::BTreeMap;
+
 use cosaci::jobs::{
     Limits, Pipeline, PipelineResult, Step, StepStatus, canonical_encoding, execute_pipeline,
 };
@@ -158,19 +160,25 @@ fn output_changing_mutation_propagates(tc: TestCase) {
 // stable hash on every runner: the canonical hash of the step value
 // itself. This lets a partially-implemented coordinator produce
 // consistent attestations without aborting the pipeline.
+//
+// The original encoding of this test used `Step::SourceFetch` since
+// that was a NotImplemented variant in v0.3-pre-#40. With #40 landed,
+// SourceFetch now executes (or fails with `git not found` /
+// `clone failed`); the NotImplemented surface is now `Step::ExecNative`
+// (lands in #43 + #54 follow-ons).
 // ----------------------------------------------------------------------------
 #[hegel::test]
 fn not_implemented_steps_are_deterministic(tc: TestCase) {
-    let url_len = tc.draw(generators::integers::<usize>().min_value(1).max_value(64));
-    let url: String = (0..url_len)
-        .map(|i| ((i % 26) as u8 + b'a') as char)
+    let cmd_len = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+    let argv: Vec<String> = (0..cmd_len)
+        .map(|i| format!("arg-{i}-{}", tc.draw(generators::integers::<u32>())))
         .collect();
-    let ref_str = format!("ref-{}", tc.draw(generators::integers::<u32>()));
 
     let p = Pipeline {
-        steps: vec![Step::SourceFetch {
-            url: url.clone(),
-            reference: ref_str.clone(),
+        steps: vec![Step::ExecNative {
+            command: argv.clone(),
+            env: BTreeMap::new(),
+            limits: Limits::default(),
         }],
     };
 

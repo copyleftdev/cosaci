@@ -18,6 +18,10 @@ ciborium        = { workspace = true }
 serde           = { workspace = true }
 serde-big-array = { workspace = true }
 sha2            = { workspace = true }
+tempfile        = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

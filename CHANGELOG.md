@@ -12,6 +12,62 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — deterministic source-fetching step (#40, partial)
+
+- New `cosaci-jobs::source_fetch` module:
+  - `hash_working_tree(root, exclude_dirs) -> [u8; 32]` — pure
+    file-system primitive. Walks `root`, emits canonical
+    `(rel_path, mode, blob_sha256)` records sorted
+    lexicographically, hashes the length-prefixed record stream
+    with SHA-256. Two equivalent trees produce equal hashes;
+    any single-bit divergence in path, mode, or content
+    propagates. Modes are reduced to git's two-mode model
+    (`0o100644` / `0o100755`); symlinks are skipped (a
+    determinism hazard, rarely needed in CI).
+  - `execute_source_fetch(url, reference) -> SourceFetchOutput`
+    — thin wrapper that shells out to `git`: `git clone <url> .`
+    into a fresh tempdir, `git checkout <reference>`, capture
+    `git rev-parse HEAD`, and `hash_working_tree` over the
+    working tree (excluding `.git`). The tempdir is cleaned up
+    when the output drops.
+  - `output_hash(&SourceFetchOutput) -> [u8; 32]` — composed
+    hash that binds **both** `resolved_sha` and `tree_hash`.
+    Two committee members that resolved a moving branch to
+    different commits produce divergent `output_hash`es even
+    if (by coincidence) the trees happen to agree — the
+    branch-moves-mid-round detection mechanism the issue
+    specifies.
+- `Step::SourceFetch { url, reference }` is wired through
+  `execute_pipeline`. Successful fetches return
+  `StepStatus::Success` with the composed `output_hash`;
+  `git`-not-on-`PATH` and clone/checkout failures return
+  `StepStatus::Failed` with a deterministic `output_hash`
+  binding `(step_canonical_bytes, error_kind)` so two runners
+  hitting the same failure produce equal hashes.
+- New hypothesis card `hypotheses/source-fetch-determinism.md`
+  (class A, Tier 0). Six Hegel properties on the pure tree
+  primitive: self-equality, order-independence (cross-runner
+  determinism), content-sensitivity, path-set-sensitivity,
+  exclude-dirs-respected, and `output_hash` binds
+  `resolved_sha`. Plus an integration test
+  `source_fetch_integration.rs` that builds a `git init`-based
+  fixture repo at test time and exercises
+  `execute_source_fetch` end-to-end.
+- `tests/pipeline_determinism.rs` property 4 (NotImplemented
+  step determinism) was rewritten to exercise `Step::ExecNative`
+  instead of `Step::SourceFetch`, since the latter is now
+  implemented.
+- New deps: `cosaci-jobs` gains `tempfile` (workspace).
+- **Out of scope (follow-on):** symlink handling; CRLF
+  normalization across platforms; resource bounds on the
+  fetch step (max clone size, wall clock — `Limits` is
+  carried but not enforced for `SourceFetch` yet); coordinator-
+  level branch-moves-mid-round aggregation (a runner whose
+  SHA diverged today produces a divergent
+  `final_artifact_hash` and the existing slashing-faithfulness
+  machinery handles it; a dedicated divergence-channel
+  envelope is the follow-on).
+
 ### Added — job submission CLI (#32, partial)
 
 - Coordinator gains `--submit-stdin` (read NDJSON job submissions
