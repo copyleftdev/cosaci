@@ -659,5 +659,8 @@ fn pipeline_canonical_bytes_round_trip(tc: TestCase) {
     };
     let b1 = canonical_bytes_pipeline(&payload).expect("encode 1");
     let b2 = canonical_bytes_pipeline(&payload).expect("encode 2");
-    assert_eq!(b1, b2, "canonical_bytes_pipeline not stable across re-encodes");
+    assert_eq!(
+        b1, b2,
+        "canonical_bytes_pipeline not stable across re-encodes"
+    );
 }

@@ -127,9 +127,7 @@ pub struct PipelineSubmissionPayload {
 ///
 /// Returns an error if ciborium serialization fails (in
 /// practice unreachable for in-memory writers).
-pub fn canonical_bytes_pipeline(
-    payload: &PipelineSubmissionPayload,
-) -> Result<Vec<u8>, String> {
+pub fn canonical_bytes_pipeline(payload: &PipelineSubmissionPayload) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     ciborium::into_writer(payload, &mut buf)
         .map_err(|e| format!("ciborium encode PipelineSubmissionPayload: {e}"))?;
