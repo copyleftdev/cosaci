@@ -355,7 +355,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "cosaci"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-admin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-agent"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cosaci-core",
  "cosaci-jobs",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-coordinator"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cosaci-core",
  "cosaci-jobs",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chacha20poly1305",
  "ciborium",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-demo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cosaci-core",
  "cosaci-protocol",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-jobs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-state"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-vrf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "merlin",
  "schnorrkel",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "sha2 0.11.0",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-webhook"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hmac",
  "serde",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "cosaci-webhook-listener"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "cosaci-core",
