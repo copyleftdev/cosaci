@@ -57,17 +57,36 @@ registered. The submission gate exposes one verdict for the
 whole signature-failure surface; operators triage via the coord
 log line that *does* distinguish the two cases.
 
+## Replay protection (closed in #46 follow-on)
+
+- **Duplicate `(tenant_id, nonce)` within window rejected as
+  `ReplayDetected`.** The replay key is
+  `SHA-256(tenant_id ‖ nonce)[..8]` (truncated to u64) — embed-
+  ding `tenant_id` scopes the replay set per-tenant so a
+  misbehaving tenant can't pre-claim another tenant's nonces.
+  SHA-256 (vs a faster XOR fold) is required because cross-
+  tenant collisions under XOR are predictable and a Hegel-
+  shrinker discovered the cross-tenant DoS with two hours of
+  test runtime; SHA-256 makes the same collision 2^-64
+  cryptographically.
+- **Replay does not drain the rate-limit bucket.** The four-
+  stage gate is tenant-lookup → signature → replay → rate-
+  limit; replay short-circuits before the token spend so an
+  attacker can't drain a tenant's bucket with replays.
+- **Fresh nonce after replay still admits.** The replay set is
+  per `(tenant, nonce)`; rejecting one entry doesn't poison
+  the tenant's stream.
+- Replay-window TTL is 5 minutes (`REPLAY_TTL_NS`). Sweep is
+  the existing `ReplayGuard::sweep` — bounded under steady
+  traffic.
+
 ## Out of scope (follow-on)
 
-- Replay protection on `nonce`. The payload carries a `nonce`
-  field but v0.3 does not enforce uniqueness via the bloom
-  filter; a replay attack within the rate-limit window is
-  detected only by the operator (a bursty pattern of identical
-  artifact_hashes). The replay-protection card already covers
-  the algebra; wiring it through submission_auth is the
-  follow-on PR.
 - Hierarchical / fair queuing across tenants. The current gate
   is per-tenant token-bucket; one tenant's burst can crowd the
   shared submission queue if the per-tenant capacity sums
   exceed `--queue-cap`.
 - Distributed rate limiting across coordinator shards.
+- Distributed *replay* protection across coordinator shards
+  (a tenant accepted on one shard could replay on another
+  during the window without coordination).

@@ -12,6 +12,51 @@ bumps. v1.0 onward, each crate versions independently.
 
 In-progress v0.3.0 work, accumulating since the v0.2.0 tag.
 
+### Added — submission replay protection (#46 follow-on)
+
+- New `AuthCheck::ReplayDetected` verdict. Closes the
+  out-of-scope item from `submission-auth-gate.md`'s original
+  encoding.
+- `verify_and_admit` is now a four-stage gate:
+  tenant-lookup → signature → **replay** → rate-limit.
+  Replay short-circuits before any token spend so an attacker
+  can't drain a tenant's bucket with replays.
+- Replay key is `SHA-256(tenant_id.to_le_bytes() ‖
+  nonce.to_le_bytes())[..8]` truncated to u64. Embedding
+  `tenant_id` in the key scopes the replay set per-tenant —
+  a misbehaving tenant can't pre-claim another tenant's
+  nonces. SHA-256 was chosen over a faster XOR fold because
+  Hegel discovered cross-tenant collision DoS under XOR
+  during the implementation; SHA-256 makes the same
+  collision cryptographically improbable (2^-64 per pair).
+- New field `AuthState::replay: ReplayGuard<SystemClock>` on
+  the coord. Default TTL `REPLAY_TTL_NS = 5 minutes`. Wired
+  through `check_submission` → `verify_and_admit`.
+- The SIGHUP-driven tenant registry reload (#46 follow-on
+  shipped earlier) deliberately preserves the replay set
+  across reloads — replay state is runtime accounting, not
+  configuration; reloading would forget previously-seen
+  nonces and let a captured-and-replayed wire body slip
+  through across the seam.
+- Two new Hegel properties on
+  `tests/submission_auth_gate.rs` (8 tests total now):
+  `duplicate_nonce_within_window_is_replay`,
+  `fresh_nonce_after_replay_still_accepts`. Asserts replay
+  rejection and that the rate-limit bucket is preserved on
+  replay.
+- `verify_and_admit` signature gained `now_ns: u64` (the
+  caller's clock reading) and `replay_guard: &mut
+  ReplayGuard<C>`. Existing tests + the coord's
+  `check_submission` were updated.
+- Hypothesis card `submission-auth-gate.md` "Replay
+  protection" section moved from out-of-scope to closed,
+  documenting the SHA-256 key choice and the 2^-64 collision
+  bound.
+- **Out of scope (follow-on).** Distributed replay
+  protection across coordinator shards (a captured wire
+  body could be accepted on one shard and replayed on
+  another during the window without coordination).
+
 ### Changed — tenant registry hot-reload (#46 follow-on)
 
 - SIGHUP now reloads `tenants.txt` in addition to the existing

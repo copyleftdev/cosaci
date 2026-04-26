@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::rate_limit::RateLimiter;
+use crate::replay::ReplayGuard;
 use crate::tenant::{TenantId, TenantRegistry, fingerprint};
 
 /// Canonical, signable shape of a job submission. The coordinator
@@ -98,18 +99,38 @@ pub enum AuthCheck {
     BadSignature,
     /// Tenant's rate bucket is empty.
     RateLimited,
+    /// Submission's `nonce` was already accepted within the
+    /// replay-protection window. The signature was valid (so the
+    /// submission is from a legit tenant) — this is alertable
+    /// rather than a routine reject. Operators should look for
+    /// either a buggy producer (resending its own submissions)
+    /// or an active replay attacker (capturing-and-resending a
+    /// signed wire body).
+    ReplayDetected,
 }
 
-/// Apply the three-stage gate to one submission. The
-/// [`RateLimiter`] is consumed only on `Ok` — `BadSignature` and
-/// `UnknownTenant` short-circuit before any token spend, so an
-/// attacker can't drain a tenant's bucket with forged signatures.
+/// Apply the four-stage gate to one submission. The
+/// [`RateLimiter`] and [`ReplayGuard`] are consumed only on `Ok` —
+/// `BadSignature`, `UnknownTenant`, and `ReplayDetected`
+/// short-circuit before any token spend, so an attacker can't
+/// drain a tenant's bucket with forged signatures or replays.
+///
+/// Stage order matters:
+/// 1. Tenant lookup (cheapest reject; no signature work for
+///    unknown tenants).
+/// 2. Signature verification (so an attacker can't probe
+///    nonce-uniqueness without a valid signature).
+/// 3. Replay check (so a replayed submission doesn't drain the
+///    legit tenant's rate bucket).
+/// 4. Rate limit (consumes one token on `Ok`).
 pub fn verify_and_admit<C: Clock>(
     payload: &JobSubmissionPayload,
     pubkey: &[u8; 32],
     signature: &[u8; 64],
+    now_ns: u64,
     registry: &TenantRegistry,
     rate_limiter: &mut RateLimiter<C>,
+    replay_guard: &mut ReplayGuard<C>,
 ) -> AuthCheck {
     let Some(tenant) = registry.get(payload.tenant_id) else {
         return AuthCheck::UnknownTenant;
@@ -132,7 +153,25 @@ pub fn verify_and_admit<C: Clock>(
         return AuthCheck::BadSignature;
     }
 
-    // Stage 3: rate limit. Consume one token per submission.
+    // Stage 3: replay check. Fold `(tenant_id, nonce)` to u64
+    // (tenant_id ^ nonce_lo ^ nonce_hi) so the replay scope
+    // is **per-tenant**. Without tenant_id in the key, a
+    // misbehaving tenant A submitting predictable nonces could
+    // deny-of-service tenant B by pre-claiming nonces B would
+    // pick. With it folded in, cross-tenant collisions need
+    // XOR(tenant_a, n_a) == XOR(tenant_b, n_b), which has
+    // 2^-64 probability for uniformly-drawn nonces. We pass
+    // `now_ns` for both the freshness arg and the acceptance
+    // time, so the freshness arm is a no-op — this gate only
+    // enforces nonce uniqueness, not submission-side
+    // timestamp freshness (the wire payload doesn't carry an
+    // external timestamp).
+    let replay_key = fold_replay_key(payload.tenant_id, payload.nonce);
+    if replay_guard.accept(replay_key, now_ns).is_err() {
+        return AuthCheck::ReplayDetected;
+    }
+
+    // Stage 4: rate limit. Consume one token per submission.
     if !rate_limiter.accept_with_config(
         payload.tenant_id,
         1,
@@ -143,6 +182,26 @@ pub fn verify_and_admit<C: Clock>(
     }
 
     AuthCheck::Ok
+}
+
+/// Per-tenant replay key: SHA-256 of `(tenant_id ‖ nonce)`
+/// truncated to u64. Embedding `tenant_id` in the key scopes
+/// the replay set per-tenant — a tenant can't pre-claim
+/// another tenant's nonces. We hash rather than XOR because a
+/// pure XOR has predictable cross-tenant collisions
+/// (`tenant_a ^ tenant_b == n_a ^ n_b`), so a misbehaving
+/// tenant A submitting carefully-chosen nonces could
+/// deny-of-service a known tenant B. SHA-256 makes
+/// cross-tenant collision probability 2^-64 even under
+/// adversarial input.
+fn fold_replay_key(tenant_id: TenantId, nonce: u128) -> u64 {
+    let mut h = Sha256::new();
+    h.update(tenant_id.to_le_bytes());
+    h.update(nonce.to_le_bytes());
+    let bytes = h.finalize();
+    let mut out = [0_u8; 8];
+    out.copy_from_slice(&bytes[..8]);
+    u64::from_le_bytes(out)
 }
 
 /// SHA-256 of a tenant's pubkey — same primitive as

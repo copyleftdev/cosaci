@@ -7,10 +7,14 @@ mod common;
 
 use common::TestClock;
 use cosaci::rate_limit::RateLimiter;
+use cosaci::replay::ReplayGuard;
 use cosaci::signing::Keypair;
 use cosaci::submission_auth::{AuthCheck, JobSubmissionPayload, canonical_bytes, verify_and_admit};
 use cosaci::tenant::{TenantRecord, TenantRegistry, fingerprint};
 use hegel::{TestCase, generators};
+
+/// 5-minute replay TTL — same default the coord runs with.
+const REPLAY_TTL_NS: u64 = 5 * 60 * 1_000_000_000;
 
 // ────────────────────────────────────────────────────────────────────────
 // Hegel draw helpers
@@ -52,13 +56,19 @@ fn draw_payload(tc: &TestCase, tenant_id: u64) -> JobSubmissionPayload {
 }
 
 /// Build a single-tenant registry + signing keypair + a fresh
-/// rate limiter so each property test runs against a known-good
-/// initial state.
+/// rate limiter + a fresh replay guard so each property test
+/// runs against a known-good initial state.
 fn fresh_setup(
     tc: &TestCase,
     capacity: u64,
     refill_per_sec: u64,
-) -> (TenantRegistry, Keypair, RateLimiter<TestClock>) {
+) -> (
+    TenantRegistry,
+    Keypair,
+    TestClock,
+    RateLimiter<TestClock>,
+    ReplayGuard<TestClock>,
+) {
     let tenant_id: u64 = tc.draw(
         generators::integers::<u64>()
             .min_value(1)
@@ -79,12 +89,12 @@ fn fresh_setup(
     .expect("insert");
 
     let clock = TestClock::default();
-    // Outer caller picks the bucket params on the limiter's
-    // defaults; they're unused on the auth path
-    // (`accept_with_config` overrides) but the type still needs
-    // them.
-    let limiter = RateLimiter::new(clock, capacity, refill_per_sec);
-    (reg, kp, limiter)
+    // Advance the clock past the replay TTL so timestamp diffs
+    // in the test are well-defined and don't underflow.
+    clock.advance(REPLAY_TTL_NS * 2);
+    let limiter = RateLimiter::new(clock.clone(), capacity, refill_per_sec);
+    let replay = ReplayGuard::new(clock.clone(), REPLAY_TTL_NS);
+    (reg, kp, clock, limiter, replay)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -96,7 +106,7 @@ fn fresh_setup(
 // ────────────────────────────────────────────────────────────────────────
 #[hegel::test]
 fn well_formed_submission_is_admitted(tc: TestCase) {
-    let (reg, kp, mut limiter) = fresh_setup(&tc, 100, 10);
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
     let tenant_id = reg.iter().next().unwrap().tenant_id;
     let payload = draw_payload(&tc, tenant_id);
 
@@ -104,7 +114,15 @@ fn well_formed_submission_is_admitted(tc: TestCase) {
     let sig = kp.sign(&bytes).to_bytes();
     let pk = kp.verifying_key().to_bytes();
 
-    let verdict = verify_and_admit(&payload, &pk, &sig, &reg, &mut limiter);
+    let verdict = verify_and_admit(
+        &payload,
+        &pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
     assert_eq!(
         verdict,
         AuthCheck::Ok,
@@ -117,7 +135,7 @@ fn well_formed_submission_is_admitted(tc: TestCase) {
 // ────────────────────────────────────────────────────────────────────────
 #[hegel::test]
 fn unknown_tenant_rejected(tc: TestCase) {
-    let (reg, kp, mut limiter) = fresh_setup(&tc, 100, 10);
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
     let known_id = reg.iter().next().unwrap().tenant_id;
     // Pick a tenant_id that's NOT in the registry.
     let bogus_id: u64 = tc.draw(generators::integers::<u64>().min_value(known_id + 1));
@@ -128,7 +146,15 @@ fn unknown_tenant_rejected(tc: TestCase) {
     let pk = kp.verifying_key().to_bytes();
 
     let pre = limiter.tokens_of(known_id);
-    let verdict = verify_and_admit(&payload, &pk, &sig, &reg, &mut limiter);
+    let verdict = verify_and_admit(
+        &payload,
+        &pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
     assert_eq!(verdict, AuthCheck::UnknownTenant);
 
     // Bucket of the legitimate tenant must be untouched.
@@ -141,7 +167,7 @@ fn unknown_tenant_rejected(tc: TestCase) {
 // ────────────────────────────────────────────────────────────────────────
 #[hegel::test]
 fn wrong_pubkey_is_bad_signature(tc: TestCase) {
-    let (reg, kp, mut limiter) = fresh_setup(&tc, 100, 10);
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
     let tenant_id = reg.iter().next().unwrap().tenant_id;
     let payload = draw_payload(&tc, tenant_id);
 
@@ -160,7 +186,15 @@ fn wrong_pubkey_is_bad_signature(tc: TestCase) {
     let sig = kp.sign(&bytes).to_bytes();
 
     let pre = limiter.tokens_of(tenant_id);
-    let verdict = verify_and_admit(&payload, &attacker_pk, &sig, &reg, &mut limiter);
+    let verdict = verify_and_admit(
+        &payload,
+        &attacker_pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
     assert_eq!(verdict, AuthCheck::BadSignature);
     assert_eq!(
         pre,
@@ -178,7 +212,7 @@ fn wrong_pubkey_is_bad_signature(tc: TestCase) {
 // ────────────────────────────────────────────────────────────────────────
 #[hegel::test]
 fn tampered_payload_is_bad_signature(tc: TestCase) {
-    let (reg, kp, mut limiter) = fresh_setup(&tc, 100, 10);
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
     let tenant_id = reg.iter().next().unwrap().tenant_id;
     let payload = draw_payload(&tc, tenant_id);
 
@@ -199,7 +233,15 @@ fn tampered_payload_is_bad_signature(tc: TestCase) {
     }
 
     let pre = limiter.tokens_of(tenant_id);
-    let verdict = verify_and_admit(&tampered, &pk, &sig, &reg, &mut limiter);
+    let verdict = verify_and_admit(
+        &tampered,
+        &pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
     assert_eq!(verdict, AuthCheck::BadSignature);
     assert_eq!(
         pre,
@@ -217,7 +259,7 @@ fn tampered_payload_is_bad_signature(tc: TestCase) {
 #[hegel::test]
 fn capacity_plus_one_is_rate_limited(tc: TestCase) {
     let capacity: u64 = tc.draw(generators::integers::<u64>().min_value(1).max_value(8));
-    let (reg, kp, mut limiter) = fresh_setup(&tc, capacity, 0);
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, capacity, 0);
     let tenant_id = reg.iter().next().unwrap().tenant_id;
     let pk = kp.verifying_key().to_bytes();
 
@@ -234,7 +276,15 @@ fn capacity_plus_one_is_rate_limited(tc: TestCase) {
         };
         let bytes = canonical_bytes(&payload).expect("encode");
         let sig = kp.sign(&bytes).to_bytes();
-        let v = verify_and_admit(&payload, &pk, &sig, &reg, &mut limiter);
+        let v = verify_and_admit(
+            &payload,
+            &pk,
+            &sig,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay,
+        );
         assert_eq!(v, AuthCheck::Ok, "capacity {capacity}, drain step {i}");
     }
 
@@ -249,7 +299,15 @@ fn capacity_plus_one_is_rate_limited(tc: TestCase) {
     };
     let bytes = canonical_bytes(&payload).expect("encode");
     let sig = kp.sign(&bytes).to_bytes();
-    let v = verify_and_admit(&payload, &pk, &sig, &reg, &mut limiter);
+    let v = verify_and_admit(
+        &payload,
+        &pk,
+        &sig,
+        clock.now(),
+        &reg,
+        &mut limiter,
+        &mut replay,
+    );
     assert_eq!(v, AuthCheck::RateLimited);
 }
 
@@ -299,7 +357,10 @@ fn tenant_buckets_are_isolated(tc: TestCase) {
     })
     .expect("insert B");
 
-    let mut limiter = RateLimiter::new(TestClock::default(), 1, 0);
+    let clock = TestClock::default();
+    clock.advance(REPLAY_TTL_NS * 2);
+    let mut limiter = RateLimiter::new(clock.clone(), 1, 0);
+    let mut replay = ReplayGuard::new(clock.clone(), REPLAY_TTL_NS);
 
     let mk = |id, n| JobSubmissionPayload {
         tenant_id: id,
@@ -316,7 +377,15 @@ fn tenant_buckets_are_isolated(tc: TestCase) {
         let bytes = canonical_bytes(&p).expect("encode");
         let sig = kp_a.sign(&bytes).to_bytes();
         assert_eq!(
-            verify_and_admit(&p, &pk_a, &sig, &reg, &mut limiter),
+            verify_and_admit(
+                &p,
+                &pk_a,
+                &sig,
+                clock.now(),
+                &reg,
+                &mut limiter,
+                &mut replay
+            ),
             AuthCheck::Ok
         );
     }
@@ -325,7 +394,15 @@ fn tenant_buckets_are_isolated(tc: TestCase) {
     let bytes = canonical_bytes(&p).expect("encode");
     let sig = kp_a.sign(&bytes).to_bytes();
     assert_eq!(
-        verify_and_admit(&p, &pk_a, &sig, &reg, &mut limiter),
+        verify_and_admit(
+            &p,
+            &pk_a,
+            &sig,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
         AuthCheck::RateLimited
     );
 
@@ -334,8 +411,137 @@ fn tenant_buckets_are_isolated(tc: TestCase) {
     let bytes_b = canonical_bytes(&p_b).expect("encode B");
     let sig_b = kp_b.sign(&bytes_b).to_bytes();
     assert_eq!(
-        verify_and_admit(&p_b, &pk_b, &sig_b, &reg, &mut limiter),
+        verify_and_admit(
+            &p_b,
+            &pk_b,
+            &sig_b,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
         AuthCheck::Ok,
         "tenant A's exhaustion bled into tenant B's bucket"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Property 7 — replay rejection (issue #46 follow-on).
+//
+// Submitting the same `(tenant_id, nonce)` twice in the same
+// replay window returns `ReplayDetected` on the second attempt.
+// The first attempt is `Ok`; the second is rejected without
+// draining the rate-limit bucket (the rate-limit gate is stage
+// 4, after replay).
+// ────────────────────────────────────────────────────────────────────────
+#[hegel::test]
+fn duplicate_nonce_within_window_is_replay(tc: TestCase) {
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
+    let tenant_id = reg.iter().next().unwrap().tenant_id;
+    let payload = draw_payload(&tc, tenant_id);
+    let bytes = canonical_bytes(&payload).expect("encode");
+    let sig = kp.sign(&bytes).to_bytes();
+    let pk = kp.verifying_key().to_bytes();
+
+    // First submission accepts.
+    assert_eq!(
+        verify_and_admit(
+            &payload,
+            &pk,
+            &sig,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
+        AuthCheck::Ok
+    );
+    let pre = limiter.tokens_of(tenant_id);
+
+    // Second submission with the SAME canonical bytes (so the
+    // signature still verifies) but the replay guard already
+    // recorded the (tenant_id, nonce) → ReplayDetected.
+    assert_eq!(
+        verify_and_admit(
+            &payload,
+            &pk,
+            &sig,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
+        AuthCheck::ReplayDetected
+    );
+
+    // Rate-limit bucket NOT drained on replay (replay short-
+    // circuits before the rate-limit gate).
+    assert_eq!(
+        pre,
+        limiter.tokens_of(tenant_id),
+        "replay rejection drained legit bucket"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Property 8 — fresh nonce after a replay still admits.
+//
+// A duplicate submission gets ReplayDetected, but a *different*
+// nonce immediately after still accepts. The replay set is per-
+// (tenant, nonce); rejecting one entry doesn't poison the
+// tenant's whole submission stream.
+// ────────────────────────────────────────────────────────────────────────
+#[hegel::test]
+fn fresh_nonce_after_replay_still_accepts(tc: TestCase) {
+    let (reg, kp, clock, mut limiter, mut replay) = fresh_setup(&tc, 100, 10);
+    let tenant_id = reg.iter().next().unwrap().tenant_id;
+    let pk = kp.verifying_key().to_bytes();
+    let p1 = draw_payload(&tc, tenant_id);
+    let mut p2 = p1.clone();
+    p2.nonce = p1.nonce.wrapping_add(1);
+
+    let bytes1 = canonical_bytes(&p1).expect("encode 1");
+    let sig1 = kp.sign(&bytes1).to_bytes();
+    assert_eq!(
+        verify_and_admit(
+            &p1,
+            &pk,
+            &sig1,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
+        AuthCheck::Ok
+    );
+
+    // Replay of p1.
+    assert_eq!(
+        verify_and_admit(
+            &p1,
+            &pk,
+            &sig1,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
+        AuthCheck::ReplayDetected
+    );
+
+    // Fresh nonce in p2 — accepts.
+    let bytes2 = canonical_bytes(&p2).expect("encode 2");
+    let sig2 = kp.sign(&bytes2).to_bytes();
+    assert_eq!(
+        verify_and_admit(
+            &p2,
+            &pk,
+            &sig2,
+            clock.now(),
+            &reg,
+            &mut limiter,
+            &mut replay
+        ),
+        AuthCheck::Ok
     );
 }
