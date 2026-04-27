@@ -260,6 +260,15 @@ fn main() -> std::io::Result<()> {
     // bind a second TLS listener on that addr and serve `GetJob` /
     // `GetLogRoot` requests against the live job registry + log.
     let read_addr = arg_or(&args, "--read-addr", "");
+    // `--captures-dir <path>` enables persistence of attestation
+    // captures (#108 PR 3 of N). Empty (default) means
+    // captures-on-receive are logged but not stored; the
+    // `GetCaptures` retrieval envelope returns `CapturesNotFound`
+    // for every request. Non-empty: per-bundle CBOR files are
+    // written under `<dir>/<job_id>/<runner_id>.cbor` whenever
+    // an `AttestationBundle` with non-empty captures arrives,
+    // and the read API serves them back via `GetCaptures`.
+    let captures_dir = arg_or(&args, "--captures-dir", "");
     // `--enrollment <path>` enables the agent-enrollment gate
     // (issue #45). Empty means disabled — every mTLS-/VRF-valid
     // registration is accepted (current behavior). Non-empty: load
@@ -478,8 +487,18 @@ fn main() -> std::io::Result<()> {
             shared_cfg.clone(),
             records.clone(),
             log.clone(),
+            captures_dir.clone(),
         )?;
         tracing::info!("[coordinator] read API listening on {read_addr} (mTLS)");
+    }
+    if !captures_dir.is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&captures_dir) {
+            tracing::warn!(
+                "[coordinator] --captures-dir {captures_dir}: create_dir_all failed: {e}"
+            );
+        } else {
+            tracing::info!("[coordinator] captures persistence enabled at {captures_dir}");
+        }
     }
 
     // Admin wire-protocol listener (issue #53 follow-on). Read-
@@ -590,6 +609,7 @@ fn main() -> std::io::Result<()> {
             &log,
             &records,
             journal.as_ref(),
+            &captures_dir,
         ) {
             Ok(()) => {
                 completed += 1;
@@ -738,6 +758,7 @@ fn run_one_job(
     log: &Arc<Mutex<LogBackend>>,
     records: &Arc<Mutex<HashMap<u64, JobRecord>>>,
     journal: Option<&Arc<Mutex<Journal>>>,
+    captures_dir: &str,
 ) -> std::io::Result<()> {
     // Journal: JobSubmitted (issue #51). The internal demo loop
     // submits jobs in-process, but the lifecycle event is the same
@@ -938,9 +959,6 @@ fn run_one_job(
             captures.len()
         );
         for cap in &captures {
-            // #108 PR 2 of N: log captures alongside the
-            // attestation. Persistence + retrieval API land
-            // in the next #108 PR.
             tracing::info!(
                 "[coordinator]   capture name='{}' kind={:?} length={} sha256={:02x?}…",
                 cap.name,
@@ -948,6 +966,20 @@ fn run_one_job(
                 cap.length,
                 &cap.sha256[..4]
             );
+        }
+        // #108 PR 3 of N: persist captures to disk if --captures-dir
+        // is set AND the bundle has captures AND the attestation
+        // signature checked out. Persisting unverified bundles
+        // would let a runner with mTLS but a bad signing key smear
+        // arbitrary captures into the archive.
+        if sig_ok && !captures.is_empty() && !captures_dir.is_empty() {
+            if let Err(e) = persist_captures(captures_dir, job_id, ag.runner_id, &captures) {
+                tracing::warn!(
+                    "[coordinator] persist captures (job {} runner {}): {e}",
+                    job_id,
+                    ag.runner_id
+                );
+            }
         }
         if sig_ok {
             // Journal: AttestationReceived (issue #51). We only
@@ -1686,6 +1718,7 @@ fn spawn_read_server(
     shared_cfg: SharedServerConfig,
     records: Arc<Mutex<HashMap<u64, JobRecord>>>,
     log: Arc<Mutex<LogBackend>>,
+    captures_dir: String,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(&addr)?;
     thread::spawn(move || {
@@ -1709,7 +1742,8 @@ fn spawn_read_server(
             let stream = ServerStream::new(conn, tcp);
             let records = records.clone();
             let log = log.clone();
-            thread::spawn(move || handle_read_client(stream, peer, records, log));
+            let captures_dir = captures_dir.clone();
+            thread::spawn(move || handle_read_client(stream, peer, records, log, captures_dir));
         }
     });
     Ok(())
@@ -2264,11 +2298,62 @@ impl cosaci_core::clock::Clock for AdminWallClock {
     }
 }
 
+/// On-disk path for the captures of a `(job_id, runner_id)`
+/// tuple, given the operator's `--captures-dir`. Layout is
+/// `<root>/<job_id>/<runner_id>.cbor`. The intermediate
+/// `<job_id>` directory is created on first write per job.
+fn captures_path(root: &str, job_id: u64, runner_id: u64) -> std::path::PathBuf {
+    std::path::PathBuf::from(root)
+        .join(job_id.to_string())
+        .join(format!("{runner_id}.cbor"))
+}
+
+/// Write a `(job_id, runner_id)` capture bundle to disk under
+/// the operator's `--captures-dir`. The path is
+/// `<root>/<job_id>/<runner_id>.cbor` and the contents are
+/// the CBOR encoding of `Vec<CapturedOutput>`. Caller has
+/// already gated on `sig_ok` and non-empty captures.
+fn persist_captures(
+    root: &str,
+    job_id: u64,
+    runner_id: u64,
+    captures: &[cosaci_jobs::CapturedOutput],
+) -> std::io::Result<()> {
+    let path = captures_path(root, job_id, runner_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut buf = Vec::new();
+    ciborium::into_writer(captures, &mut buf)
+        .map_err(|e| std::io::Error::other(format!("ciborium encode captures: {e}")))?;
+    std::fs::write(&path, buf)?;
+    tracing::info!(
+        "[coordinator] persisted captures: job={job_id} runner={runner_id} count={} path={}",
+        captures.len(),
+        path.display()
+    );
+    Ok(())
+}
+
+/// Read a previously-persisted capture bundle. Returns `None`
+/// on any read or decode failure (the read API maps that to a
+/// `CapturesNotFound` response).
+fn load_captures(
+    root: &str,
+    job_id: u64,
+    runner_id: u64,
+) -> Option<Vec<cosaci_jobs::CapturedOutput>> {
+    let path = captures_path(root, job_id, runner_id);
+    let bytes = std::fs::read(&path).ok()?;
+    ciborium::from_reader(&bytes[..]).ok()
+}
+
 fn handle_read_client(
     mut stream: ServerStream,
     peer: std::net::SocketAddr,
     records: Arc<Mutex<HashMap<u64, JobRecord>>>,
     log: Arc<Mutex<LogBackend>>,
+    captures_dir: String,
 ) {
     let req = match read_envelope(&mut stream) {
         Ok(e) => e,
@@ -2293,6 +2378,24 @@ fn handle_read_client(
                 length: log_g.len(),
             }
         }
+        Envelope::GetCaptures { job_id, runner_id } => {
+            // Captures persistence is opt-in (--captures-dir). When
+            // disabled, every GetCaptures returns NotFound — even if
+            // a real bundle was received in this run, we don't have
+            // it anymore.
+            if captures_dir.is_empty() {
+                Envelope::CapturesNotFound { job_id, runner_id }
+            } else {
+                match load_captures(&captures_dir, job_id, runner_id) {
+                    Some(captures) => Envelope::CapturesResponse {
+                        job_id,
+                        runner_id,
+                        captures,
+                    },
+                    None => Envelope::CapturesNotFound { job_id, runner_id },
+                }
+            }
+        }
         other => {
             tracing::warn!("[coordinator/read] {peer}: dropping non-read envelope {other:?}");
             return;
@@ -2303,9 +2406,6 @@ fn handle_read_client(
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// Tests — coord-side wire/auth dispatch (#106 PR 2 of N)
-// ────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2574,5 +2674,68 @@ mod tests {
             check_submission(&sub, &reg, &mut limiter, &mut replay),
             AuthCheck::BadSignature
         );
+    }
+}
+
+#[cfg(test)]
+mod captures_persistence_tests {
+    use super::*;
+    use cosaci_jobs::{CaptureKind, CapturedOutput};
+    use sha2::{Digest, Sha256};
+    use tempfile::tempdir;
+
+    fn sample(name: &str, bytes: &[u8]) -> CapturedOutput {
+        let sha256: [u8; 32] = Sha256::digest(bytes).into();
+        CapturedOutput {
+            step_index: 1,
+            name: name.into(),
+            kind: CaptureKind::Stdout,
+            sha256,
+            length: bytes.len() as u64,
+            bytes_inline: bytes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn captures_path_layout_is_per_job_per_runner() {
+        let p = captures_path("/var/lib/cosaci", 7, 3);
+        assert_eq!(p.to_string_lossy(), "/var/lib/cosaci/7/3.cbor");
+    }
+
+    #[test]
+    fn persist_then_load_round_trips() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().to_string_lossy().into_owned();
+        let originals = vec![
+            sample("build.stdout", b"compile log\n"),
+            sample("build.stderr", b""),
+        ];
+        persist_captures(&root, 42, 9, &originals).expect("persist");
+        let loaded = load_captures(&root, 42, 9).expect("load");
+        assert_eq!(originals, loaded);
+    }
+
+    #[test]
+    fn load_missing_returns_none() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().to_string_lossy().into_owned();
+        // No persist — load on a non-existent file.
+        assert!(load_captures(&root, 1, 1).is_none());
+    }
+
+    #[test]
+    fn persist_creates_per_job_subdir() {
+        // The first persist for a (job, runner) creates the
+        // intermediate `<job>/` directory; a second persist for
+        // a different runner under the same job does NOT collide
+        // (different filenames).
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().to_string_lossy().into_owned();
+        persist_captures(&root, 10, 1, &[sample("a", b"a")]).expect("persist 1");
+        persist_captures(&root, 10, 2, &[sample("b", b"b")]).expect("persist 2");
+        let r1 = load_captures(&root, 10, 1).expect("load 1");
+        let r2 = load_captures(&root, 10, 2).expect("load 2");
+        assert_eq!(r1[0].bytes_inline, b"a");
+        assert_eq!(r2[0].bytes_inline, b"b");
     }
 }

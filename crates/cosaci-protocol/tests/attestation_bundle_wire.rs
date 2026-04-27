@@ -131,6 +131,68 @@ fn empty_captures_is_shorter_on_wire_than_populated() {
 }
 
 #[test]
+fn get_captures_request_round_trips() {
+    // GetCaptures is a small request envelope — round-trip
+    // its (job_id, runner_id) tuple to confirm the variant
+    // is wire-serializable and the field bytes survive.
+    let env = Envelope::GetCaptures {
+        job_id: 42,
+        runner_id: 7,
+    };
+    let decoded = write_then_read(&env);
+    let Envelope::GetCaptures { job_id, runner_id } = decoded else {
+        panic!("variant changed");
+    };
+    assert_eq!(job_id, 42);
+    assert_eq!(runner_id, 7);
+}
+
+#[test]
+fn captures_response_round_trips_with_payload() {
+    let captures = vec![
+        capture("build.stdout", CaptureKind::Stdout, b"hello".to_vec()),
+        capture("build.stderr", CaptureKind::Stderr, b"".to_vec()),
+    ];
+    let env = Envelope::CapturesResponse {
+        job_id: 5,
+        runner_id: 3,
+        captures: captures.clone(),
+    };
+    let decoded = write_then_read(&env);
+    let Envelope::CapturesResponse {
+        job_id,
+        runner_id,
+        captures: decoded_caps,
+    } = decoded
+    else {
+        panic!("variant changed");
+    };
+    assert_eq!(job_id, 5);
+    assert_eq!(runner_id, 3);
+    assert_eq!(decoded_caps, captures);
+    // Re-hash each decoded capture's bytes_inline; should
+    // match the recorded sha256.
+    for cap in &decoded_caps {
+        let recomputed: [u8; 32] = Sha256::digest(&cap.bytes_inline).into();
+        assert_eq!(recomputed, cap.sha256);
+    }
+}
+
+#[test]
+fn captures_not_found_round_trips() {
+    let env = Envelope::CapturesNotFound {
+        job_id: 99,
+        runner_id: 1,
+    };
+    let decoded = write_then_read(&env);
+    let Envelope::CapturesNotFound { job_id, runner_id } = decoded else {
+        panic!("variant changed");
+    };
+    assert_eq!(job_id, 99);
+    assert_eq!(runner_id, 1);
+}
+
+#[test]
 fn capture_sha256_survives_wire() {
     // Round-trip a populated bundle; re-hash each decoded
     // capture's bytes_inline and assert it matches the
