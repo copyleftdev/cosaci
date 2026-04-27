@@ -20,7 +20,9 @@ use cosaci_core::attestation::{Attestation, AttestationResult};
 use cosaci_core::capabilities::{Capabilities, Platform, Runtime};
 use cosaci_core::quorum::RunnerId;
 use cosaci_core::signing::Keypair;
-use cosaci_protocol::proto::{Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope};
+use cosaci_protocol::proto::{
+    AttestationBundle, Envelope, VRF_REGISTRATION_CHALLENGE, read_envelope, write_envelope,
+};
 use cosaci_protocol::tls::{client_config_from_paths, install_crypto_provider};
 use cosaci_vrf::vrf::VrfKeypair;
 
@@ -145,8 +147,13 @@ fn main() -> std::io::Result<()> {
                     signature: [0_u8; 64],
                 };
                 att.sign_with(&signing);
-                write_envelope(&mut stream, &Envelope::SubmitAttestation(att))?;
-                tracing::info!("[agent {id}] attestation submitted");
+                let captures_count = result.captures.len();
+                let bundle = AttestationBundle {
+                    attestation: att,
+                    captures: result.captures,
+                };
+                write_envelope(&mut stream, &Envelope::SubmitAttestation(bundle))?;
+                tracing::info!("[agent {id}] attestation submitted ({captures_count} capture(s))");
             }
             Envelope::Shutdown => {
                 tracing::info!("[agent {id}] shutdown received");

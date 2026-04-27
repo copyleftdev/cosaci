@@ -917,7 +917,7 @@ fn run_one_job(
                 continue;
             }
         };
-        let Envelope::SubmitAttestation(att) = env else {
+        let Envelope::SubmitAttestation(bundle) = env else {
             tracing::warn!(
                 "[coordinator] runner {} returned {:?}, expected SubmitAttestation",
                 ag.runner_id,
@@ -926,14 +926,29 @@ fn run_one_job(
             missing.push(ag.runner_id);
             continue;
         };
+        let att = bundle.attestation;
+        let captures = bundle.captures;
         let sig_ok = att.verify_signature(&ag.signing_pk);
         tracing::info!(
-            "[coordinator] job {} runner {} attestation sig={} artifact={:02x?}…",
+            "[coordinator] job {} runner {} attestation sig={} artifact={:02x?}… captures={}",
             job_id,
             ag.runner_id,
             if sig_ok { "ok" } else { "BAD" },
-            &att.artifact_hash[..4]
+            &att.artifact_hash[..4],
+            captures.len()
         );
+        for cap in &captures {
+            // #108 PR 2 of N: log captures alongside the
+            // attestation. Persistence + retrieval API land
+            // in the next #108 PR.
+            tracing::info!(
+                "[coordinator]   capture name='{}' kind={:?} length={} sha256={:02x?}…",
+                cap.name,
+                cap.kind,
+                cap.length,
+                &cap.sha256[..4]
+            );
+        }
         if sig_ok {
             // Journal: AttestationReceived (issue #51). We only
             // record signature-valid attestations — a bad-sig
