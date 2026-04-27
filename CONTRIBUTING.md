@@ -27,6 +27,25 @@ Plus the smoke test, which CI runs over `demo_networked`:
 cargo run -p cosaci-demo --bin demo_networked
 ```
 
+### Local CI-equivalent script + pre-push hook
+
+The same gates are wired up in `scripts/ci-local.sh`. Run on demand:
+
+```sh
+scripts/ci-local.sh           # full suite
+FAST=1 scripts/ci-local.sh    # skip the slow `cargo test` step
+```
+
+Opt in to a pre-push hook so every `git push` runs the suite first
+(skippable with `git push --no-verify`):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+This is useful when you'd rather catch failures before they hit
+GitHub Actions — and essential when Actions minutes are exhausted.
+
 If a new public item lands, `#![deny(missing_docs)]` requires a doc comment
 or the build fails — locally, not just in CI.
 

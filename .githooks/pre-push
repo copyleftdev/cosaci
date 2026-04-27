@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the CI-equivalent gates locally before any push
+# reaches origin. Bypass with `git push --no-verify` when you need to
+# (e.g. WIP comment-only push, or you've already run the suite).
+#
+# Install (per checkout, one time):
+#   git config core.hooksPath .githooks
+
+set -euo pipefail
+
+repo=$(git rev-parse --show-toplevel)
+exec "$repo/scripts/ci-local.sh"
