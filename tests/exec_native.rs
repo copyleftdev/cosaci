@@ -294,6 +294,122 @@ fn memory_within_budget_succeeds() {
     );
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// cgroup-v2 cpu enforcement (#107 PR 3 of N).
+//
+// cgroup-v2's cpu.max is a rate limiter (bandwidth, not
+// cumulative time), so total-CPU-time enforcement is done by
+// polling cpu.stat::usage_usec every WALL_POLL_INTERVAL and
+// killing the child when it exceeds cpu_seconds. Tests gated on
+// cgroup-v2 cpu controller delegation.
+// ────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn cgroup_v2_cpu_delegated() -> bool {
+    let Ok(text) = std::fs::read_to_string("/proc/self/cgroup") else {
+        return false;
+    };
+    let mut path = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("0::") {
+            path =
+                Some(std::path::PathBuf::from("/sys/fs/cgroup").join(rest.trim_start_matches('/')));
+            break;
+        }
+    }
+    let Some(path) = path else {
+        return false;
+    };
+    let Ok(controllers) = std::fs::read_to_string(path.join("cgroup.subtree_control")) else {
+        return false;
+    };
+    controllers.split_whitespace().any(|c| c == "cpu")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_v2_cpu_delegated() -> bool {
+    false
+}
+
+#[test]
+fn cpu_limit_kills_busy_loop() {
+    if !cgroup_v2_cpu_delegated() {
+        eprintln!(
+            "[skip] cpu_limit_kills_busy_loop: cgroup-v2 cpu controller not delegated on this host"
+        );
+        return;
+    }
+    // A busy-wait shell loop pegs one core. With
+    // cpu_seconds=1, the executor's poll loop should detect
+    // cpu.stat::usage_usec >= 1_000_000 within one
+    // WALL_POLL_INTERVAL (50 ms) and kill the child — well
+    // before the 30s wall_seconds backstop fires.
+    //
+    // Wall_seconds is set to a generous backstop so a
+    // regression that breaks cpu enforcement gets caught here
+    // (LimitExceeded { Wall }) rather than hanging the test
+    // suite for minutes.
+    let p = Pipeline {
+        steps: vec![Step::ExecNative {
+            command: vec!["/bin/sh".into(), "-c".into(), "while :; do :; done".into()],
+            env: BTreeMap::new(),
+            limits: Limits {
+                cpu_seconds: 1,
+                wall_seconds: 30,
+                ..Limits::default()
+            },
+        }],
+    };
+    use cosaci::jobs::LimitKind;
+    let start = Instant::now();
+    let r = execute_pipeline(&p).expect("execute");
+    let elapsed = start.elapsed();
+
+    // Should be killed in ~1-2s, well under wall_seconds.
+    assert!(
+        elapsed.as_secs() < 5,
+        "cpu limit didn't kill the child in time: {elapsed:?}"
+    );
+    assert!(
+        matches!(
+            r.steps[0].status,
+            StepStatus::LimitExceeded {
+                which: LimitKind::Cpu
+            }
+        ),
+        "expected LimitExceeded {{ Cpu }}, got {:?}",
+        r.steps[0].status
+    );
+}
+
+#[test]
+fn cpu_within_budget_succeeds() {
+    if !cgroup_v2_cpu_delegated() {
+        eprintln!("[skip] cpu_within_budget_succeeds: cgroup-v2 cpu controller not delegated");
+        return;
+    }
+    // /bin/echo uses ~milliseconds of CPU. cpu_seconds=10 is
+    // generous; the step should run cleanly. Negative control
+    // for the busy-loop test — confirms cpu enforcement
+    // doesn't break unrelated steps.
+    let p = Pipeline {
+        steps: vec![Step::ExecNative {
+            command: vec!["/bin/echo".into(), "cpu-within-budget".into()],
+            env: BTreeMap::new(),
+            limits: Limits {
+                cpu_seconds: 10,
+                ..Limits::default()
+            },
+        }],
+    };
+    let r = execute_pipeline(&p).expect("execute");
+    assert!(
+        matches!(r.steps[0].status, StepStatus::Success),
+        "expected Success, got {:?}",
+        r.steps[0].status
+    );
+}
+
 #[test]
 fn memory_limit_zero_is_no_enforcement() {
     // memory_mb: 0 = unlimited (matching wall_seconds: 0

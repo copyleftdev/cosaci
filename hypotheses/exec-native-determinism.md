@@ -127,19 +127,43 @@ PR 1 — the absence of cgroups doesn't change the
 Success/Failed hash shape, only whether `Memory` is a
 reachable status.
 
+## CPU enforcement (#107 PR 3 of N)
+
+`limits.cpu_seconds` is enforced via polling cgroup-v2's
+`cpu.stat::usage_usec`. cgroup-v2's `cpu.max` is a *rate*
+limiter (bandwidth, not cumulative time), so total-CPU-time
+enforcement is observation-based:
+
+- A 50ms-poll watchdog (the same loop that handles
+  `wall_seconds`) reads `cpu.stat::usage_usec` each tick.
+- When `usage_usec >= cpu_seconds * 1_000_000`, the child is
+  `kill()`-ed and the step terminates as `LimitExceeded
+  { Cpu }`.
+- The cgroup `cpu` controller must be in
+  `cgroup.subtree_control`. Without delegation, cpu
+  enforcement is silently skipped (matching memory).
+- The hash for `LimitExceeded { Cpu }` binds only
+  `(step, LimitKind::Cpu)` — same shape as the Wall and
+  Memory cases, captured bytes excluded.
+- Falsifiable claim **cpu cap exceeded ⇒ LimitExceeded
+  { Cpu }**: a busy-wait child (`while :; do :; done`)
+  with `cpu_seconds=1` is killed within one
+  WALL_POLL_INTERVAL (50ms) of crossing the deadline, well
+  under `wall_seconds`. Witnessed live in
+  `tests/exec_native.rs::cpu_limit_kills_busy_loop`.
+
+The wait loop now has three exit paths:
+[`ExitOutcome::Exited`], [`ExitOutcome::KilledByWall`],
+[`ExitOutcome::KilledByCpu`]. First limit hit wins.
+
 ## What this PR does not enforce
 
-- **cpu_seconds** — accepted on `Limits` but still ignored.
-  cgroup-v2 `cpu.max` is a rate limiter (bandwidth, not
-  cumulative time); enforcing total CPU-seconds requires a
-  polling layer that watches `cpu.stat`'s `usage_usec`.
-  Lands in a follow-on PR.
 - **Filesystem isolation** — the child sees the parent's
   full filesystem. Mount-namespace + read-only rootfs lands
-  in #107 PR 3 of N.
+  in #107 PR 4 of N.
 - **Egress enforcement** — `limits.network` is accepted but
   not enforced at the kernel level. netns + iptables lands
-  in #107 PR 4 of N (and gets its own C-class card,
+  in #107 PR 5 of N (and gets its own C-class card,
   `egress-enforcement-faithfulness`).
 
 ## Why captured bytes are excluded on timeout
