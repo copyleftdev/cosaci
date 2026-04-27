@@ -160,20 +160,22 @@ fn output_changing_mutation_propagates(tc: TestCase) {
 // consistent attestations without aborting the pipeline.
 //
 // The NotImplemented surface has rotated through several variants as
-// executors land: SourceFetch (pre-#40), ExecNative (pre-#107), and
-// now CaptureLog / CaptureArtifact (pending #108). Each rotation
-// shrinks the unimplemented surface; the property under test is the
-// same.
+// executors land: SourceFetch (pre-#40), ExecNative (pre-#107),
+// CaptureLog (pre-#108 PR 1), and now CaptureArtifact (pending the
+// rest of #108). Each rotation shrinks the unimplemented surface;
+// the property under test is the same.
 // ----------------------------------------------------------------------------
 #[hegel::test]
 fn not_implemented_steps_are_deterministic(tc: TestCase) {
-    // Pull a random capture name; the bytes are part of the canonical
-    // hash, so distinct names produce distinct hashes deterministically.
+    // Pull a random capture name + path; the bytes are part of the
+    // canonical hash, so distinct names produce distinct hashes
+    // deterministically.
     let n: u32 = tc.draw(generators::integers::<u32>());
-    let name = format!("capture-{n}");
+    let name = format!("artifact-{n}");
+    let path = format!("artifacts/{n}.bin");
 
     let p = Pipeline {
-        steps: vec![Step::CaptureLog { name: name.clone() }],
+        steps: vec![Step::CaptureArtifact { path, name }],
     };
 
     let r1 = execute_pipeline(&p).expect("first run");
