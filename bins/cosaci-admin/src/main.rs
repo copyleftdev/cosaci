@@ -58,6 +58,7 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use cosaci_core::merkle_log::{FileStore, MerkleLog};
 use cosaci_core::signing::Keypair;
+use cosaci_jobs::{CaptureKind, CapturedOutput};
 use cosaci_protocol::proto::{
     ADMIN_HELLO_CHALLENGE, AdminAgentRecord, Envelope, read_envelope, write_envelope,
 };
@@ -104,6 +105,14 @@ effect on next coord restart):
                     [--at <unix_ns>]
     tenants revoke  --coord <addr> ... --tenant-id <u64>
 
+READ-API SUBCOMMANDS (talk to a running coord's --read-addr;
+no admin signature, plain mTLS):
+    captures get    --read-addr <addr> --ca <ca.pem>
+                    --cert <client.pem> --key <client.key.pem>
+                    [--server-name <name>]
+                    --job-id <u64> --runner-id <u64>
+                    [--bytes]   # also dump bytes_inline
+
 EXAMPLES:
     # filesystem
     cosaci-admin agents list --enrollment /etc/cosaci/enrollment.txt
@@ -130,6 +139,7 @@ fn main() -> ExitCode {
         Some("agents") => agents_cmd(&args[1..]),
         Some("tenants") => tenants_cmd(&args[1..]),
         Some("log") => log_cmd(&args[1..]),
+        Some("captures") => captures_cmd(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -661,6 +671,128 @@ fn log_root_wire(args: &[String], addr: &str) -> Result<(), String> {
         Envelope::AdminError { reason } => Err(format!("coord rejected: {reason}")),
         other => Err(format!("unexpected response: {other:?}")),
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// captures <verb>
+// ────────────────────────────────────────────────────────────────────────
+
+fn captures_cmd(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("get") => captures_get(&args[1..]),
+        Some(other) => Err(format!("unknown captures verb `{other}` (expected: get)")),
+        None => Err("captures: missing verb (get)".to_string()),
+    }
+}
+
+/// `captures get` — talks to a coord's `--read-addr` over plain
+/// mTLS (no admin signature) and renders any captures persisted
+/// for `(job_id, runner_id)`. The coord persists captures only
+/// when started with `--captures-dir <path>`; otherwise this
+/// command always reports a miss.
+fn captures_get(args: &[String]) -> Result<(), String> {
+    let addr = required_flag(args, "--read-addr")?;
+    let job_id: u64 = required_flag(args, "--job-id")?
+        .parse()
+        .map_err(|e| format!("--job-id: {e}"))?;
+    let runner_id: u64 = required_flag(args, "--runner-id")?
+        .parse()
+        .map_err(|e| format!("--runner-id: {e}"))?;
+    let dump_bytes = optional_flag(args, "--bytes").is_some();
+
+    let stream = open_read_stream(args, &addr)?;
+    let resp = request_one(stream, Envelope::GetCaptures { job_id, runner_id })?;
+    match resp {
+        Envelope::CapturesResponse {
+            job_id: j,
+            runner_id: r,
+            captures,
+        } => {
+            if j != job_id || r != runner_id {
+                return Err(format!(
+                    "coord returned captures for ({j}, {r}), asked for ({job_id}, {runner_id})"
+                ));
+            }
+            print_captures(&captures, dump_bytes);
+            Ok(())
+        }
+        Envelope::CapturesNotFound { .. } => {
+            println!("(no captures persisted for job_id={job_id} runner_id={runner_id})");
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn print_captures(captures: &[CapturedOutput], dump_bytes: bool) {
+    if captures.is_empty() {
+        println!("(captures vector is empty)");
+        return;
+    }
+    println!(
+        "{:<24}  {:<8}  {:>10}  {}",
+        "name", "kind", "length", "sha256"
+    );
+    for cap in captures {
+        let kind_label = match cap.kind {
+            CaptureKind::Stdout => "stdout",
+            CaptureKind::Stderr => "stderr",
+            CaptureKind::Artifact => "artifact",
+        };
+        println!(
+            "{:<24}  {:<8}  {:>10}  {}",
+            cap.name,
+            kind_label,
+            cap.length,
+            hex_lower(&cap.sha256)
+        );
+    }
+    if dump_bytes {
+        for cap in captures {
+            println!(
+                "\n--- {} (kind={:?}, length={}) ---",
+                cap.name, cap.kind, cap.length
+            );
+            // Best-effort UTF-8; binary captures get the lossy
+            // replacement-char treatment so the operator at least
+            // sees something coherent. For exact bytes, the on-disk
+            // file under --captures-dir is the source of truth.
+            print!("{}", String::from_utf8_lossy(&cap.bytes_inline));
+            if !cap.bytes_inline.ends_with(b"\n") {
+                println!();
+            }
+        }
+    }
+}
+
+/// Open a plain mTLS stream to the coord's `--read-addr`. No
+/// admin handshake — the read API is mTLS-only (any client
+/// cert signed by the coord's CA). Mirrors the connection
+/// pattern in `cosaci-demo/src/bin/verify.rs`.
+fn open_read_stream(args: &[String], addr: &str) -> Result<ClientStream, String> {
+    install_crypto_provider();
+    let ca_path = required_flag(args, "--ca")?;
+    let cert_path = required_flag(args, "--cert")?;
+    let key_path = required_flag(args, "--key")?;
+    let server_name_str =
+        optional_flag(args, "--server-name").unwrap_or_else(|| "cosaci.local".to_string());
+
+    let client_cfg: Arc<ClientConfig> = client_config_from_paths(&ca_path, &cert_path, &key_path)
+        .map_err(|e| format!("client config: {e}"))?;
+    let tcp = TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    tcp.set_nodelay(true)
+        .map_err(|e| format!("set_nodelay: {e}"))?;
+    let server_name: ServerName<'static> = ServerName::try_from(server_name_str.clone())
+        .map_err(|e| format!("server name {server_name_str}: {e}"))?;
+    let conn =
+        ClientConnection::new(client_cfg, server_name).map_err(|e| format!("rustls: {e}"))?;
+    Ok(ClientStream::new(conn, tcp))
+}
+
+/// Send one envelope, read one envelope back, drop the stream.
+fn request_one(mut stream: ClientStream, env: Envelope) -> Result<Envelope, String> {
+    write_envelope(&mut stream, &env).map_err(|e| format!("write request: {e}"))?;
+    read_envelope(&mut stream).map_err(|e| format!("read response: {e}"))
 }
 
 // ────────────────────────────────────────────────────────────────────────
