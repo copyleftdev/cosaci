@@ -166,3 +166,159 @@ fn empty_command_is_failed_deterministically() {
     assert!(matches!(r1.steps[0].status, StepStatus::Failed));
     assert_eq!(r1, r2, "empty-command runs diverged");
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// cgroup-v2 memory enforcement (#107 PR 2 of N).
+//
+// These tests are gated on the host having cgroup-v2 + user
+// delegation of the memory controller. On a host that lacks
+// either (e.g. cgroup-v1, no systemd, no user@.service scope),
+// the per-step cgroup setup returns None and memory_mb is a
+// no-op. To keep the test honest in either environment, we
+// detect the capability up-front and skip with a clear stdout
+// note rather than producing false-positive `Success` verdicts.
+// ────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn cgroup_v2_memory_delegated() -> bool {
+    // Mirror the production helpers without exposing them
+    // publicly. If `/proc/self/cgroup` resolves to a v2 path
+    // and that path's `cgroup.subtree_control` enables
+    // `memory`, we assume the test can create a sub-cgroup.
+    let Ok(text) = std::fs::read_to_string("/proc/self/cgroup") else {
+        return false;
+    };
+    let mut path = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("0::") {
+            path =
+                Some(std::path::PathBuf::from("/sys/fs/cgroup").join(rest.trim_start_matches('/')));
+            break;
+        }
+    }
+    let Some(path) = path else {
+        return false;
+    };
+    let Ok(controllers) = std::fs::read_to_string(path.join("cgroup.subtree_control")) else {
+        return false;
+    };
+    controllers.split_whitespace().any(|c| c == "memory")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_v2_memory_delegated() -> bool {
+    false
+}
+
+#[test]
+fn memory_oom_kill_attributed_to_limit_kind() {
+    if !cgroup_v2_memory_delegated() {
+        eprintln!(
+            "[skip] memory_oom_kill_attributed_to_limit_kind: cgroup-v2 memory controller not delegated on this host"
+        );
+        return;
+    }
+    // Allocate ~256 MiB in a single shell process while the
+    // cgroup memory cap is 16 MiB. The kernel's cgroup OOM
+    // killer fires, the cgroup records `oom_kill > 0`, and
+    // the executor attributes the failure to
+    // LimitExceeded { Memory } rather than a generic Failed.
+    //
+    // The allocator: `head -c 256M /dev/zero` reads 256 MiB
+    // from /dev/zero and writes it to stdout. We pipe that
+    // into `cat` (which reads incrementally). Without a
+    // memory cap this completes in ms; with a 16 MiB cap, the
+    // cgroup OOM-kill fires when buffered bytes pile up.
+    //
+    // Wrap it in a /dev/null sink so the parent pipe doesn't
+    // become the limiter.
+    let p = Pipeline {
+        steps: vec![Step::ExecNative {
+            command: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                // tail -c 256M reads the whole 256 MiB into
+                // a single allocation before writing — perfect
+                // for blowing past a 16 MiB cgroup cap.
+                "tail -c 268435456 /dev/zero >/dev/null".into(),
+            ],
+            env: BTreeMap::new(),
+            limits: Limits {
+                memory_mb: 16,
+                wall_seconds: 30,
+                ..Limits::default()
+            },
+        }],
+    };
+    use cosaci::jobs::LimitKind;
+    let r = execute_pipeline(&p).expect("execute");
+    assert!(
+        matches!(
+            r.steps[0].status,
+            StepStatus::LimitExceeded {
+                which: LimitKind::Memory
+            }
+        ),
+        "expected LimitExceeded {{ Memory }}, got {:?}",
+        r.steps[0].status
+    );
+}
+
+#[test]
+fn memory_within_budget_succeeds() {
+    if !cgroup_v2_memory_delegated() {
+        eprintln!(
+            "[skip] memory_within_budget_succeeds: cgroup-v2 memory controller not delegated on this host"
+        );
+        return;
+    }
+    // /bin/echo allocates ~tens of KB. A 64 MiB cap is
+    // generous; the step should run cleanly and report Success.
+    // This is the negative control for the OOM test — confirms
+    // the cgroup setup itself doesn't break unrelated steps.
+    let p = Pipeline {
+        steps: vec![Step::ExecNative {
+            command: vec!["/bin/echo".into(), "within-budget".into()],
+            env: BTreeMap::new(),
+            limits: Limits {
+                memory_mb: 64,
+                ..Limits::default()
+            },
+        }],
+    };
+    let r = execute_pipeline(&p).expect("execute");
+    assert!(
+        matches!(r.steps[0].status, StepStatus::Success),
+        "expected Success, got {:?}",
+        r.steps[0].status
+    );
+}
+
+#[test]
+fn memory_limit_zero_is_no_enforcement() {
+    // memory_mb: 0 = unlimited (matching wall_seconds: 0
+    // semantics). The cgroup is NOT created; the step runs
+    // exactly as PR 1 did. Allocates 64 MiB, well under the
+    // host's free memory, succeeds.
+    let p = Pipeline {
+        steps: vec![Step::ExecNative {
+            command: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "head -c 67108864 /dev/zero >/dev/null".into(),
+            ],
+            env: BTreeMap::new(),
+            limits: Limits {
+                memory_mb: 0,
+                wall_seconds: 30,
+                ..Limits::default()
+            },
+        }],
+    };
+    let r = execute_pipeline(&p).expect("execute");
+    assert!(
+        matches!(r.steps[0].status, StepStatus::Success),
+        "expected Success with no enforcement, got {:?}",
+        r.steps[0].status
+    );
+}

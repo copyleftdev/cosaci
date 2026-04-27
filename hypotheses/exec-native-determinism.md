@@ -72,11 +72,68 @@ For any `Step::ExecNative`:
   (50ms) of the deadline; the step terminates as
   `StepStatus::LimitExceeded { which: LimitKind::Wall }`.
 
+## Memory enforcement (#107 PR 2 of N)
+
+`limits.memory_mb` is enforced via cgroup-v2 `memory.max`
+on Linux hosts with user-delegated memory controllers.
+
+- A per-step sub-cgroup is created under the calling
+  process's cgroup (resolved via `/proc/self/cgroup`), with
+  `memory.max` set to `memory_mb << 20` bytes.
+- The child PID is written to `cgroup.procs` immediately
+  after spawn. There's a small race window between spawn
+  and attach during which the child runs uncgrouped; for
+  workloads that allocate >memory_mb in <1ms, this could
+  let the host OOM-killer fire before the cgroup engages.
+  Documented limitation; PR 3+ may close it via
+  `clone3(CLONE_INTO_CGROUP)`.
+- After the child exits, the executor reads
+  `memory.events.local` for `oom_kill > 0`. If set, the
+  step is attributed to `LimitExceeded { Memory }`
+  regardless of the child's exit signal — the cgroup's
+  counter is the ground truth.
+- The `output_hash` for `LimitExceeded { Memory }` binds
+  only `(step, LimitKind::Memory)`. Captured stdout/stderr
+  prefix is excluded for the same reason as
+  `LimitExceeded { Wall }`: partial output before OOM
+  isn't a determinism contract worth taking on.
+- Falsifiable claim **memory cap exceeded ⇒ LimitExceeded
+  { Memory }**: a step whose child allocates more than
+  `memory_mb` returns `LimitExceeded { Memory }`, with a
+  hash deterministic across runners. Witnessed live in
+  `tests/exec_native.rs::memory_oom_kill_attributed_to_
+  limit_kind`.
+- Falsifiable claim **memory_mb=0 is unlimited**: a step
+  with `memory_mb=0` skips cgroup setup entirely and runs
+  with no memory enforcement (matches PR 1 semantics).
+  Witnessed in `tests/exec_native.rs::memory_limit_zero_is_
+  no_enforcement`.
+
+### Graceful fallback
+
+cgroup setup can fail for benign reasons:
+
+- non-Linux host (macOS, Windows)
+- cgroup-v1 hybrid hierarchy
+- cgroup-v2 without user-delegated memory controller
+- writable parent cgroup not resolvable
+- `cgroup.subtree_control` doesn't list `memory`
+
+In any of these cases, `StepCgroup::try_create` returns
+`None`, the step proceeds without memory enforcement, and
+a single warn-level log line records the reason. The
+determinism contract (hash binding) remains exactly as in
+PR 1 — the absence of cgroups doesn't change the
+Success/Failed hash shape, only whether `Memory` is a
+reachable status.
+
 ## What this PR does not enforce
 
-- **cpu_seconds / memory_mb** — both are accepted on
-  `Limits` but ignored by the plain executor. cgroups v2
-  wiring lands in #107 PR 2 of N.
+- **cpu_seconds** — accepted on `Limits` but still ignored.
+  cgroup-v2 `cpu.max` is a rate limiter (bandwidth, not
+  cumulative time); enforcing total CPU-seconds requires a
+  polling layer that watches `cpu.stat`'s `usage_usec`.
+  Lands in a follow-on PR.
 - **Filesystem isolation** — the child sees the parent's
   full filesystem. Mount-namespace + read-only rootfs lands
   in #107 PR 3 of N.

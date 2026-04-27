@@ -46,9 +46,10 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -513,6 +514,20 @@ fn execute_native_step(
         }
     };
 
+    // cgroup-v2 memory enforcement (#107 PR 2 of N). Attach the
+    // child to a per-step sub-cgroup with `memory.max` set; if
+    // setup fails (no cgroup-v2, no user delegation, no memory
+    // controller in subtree), `try_create` returns `None` and the
+    // step runs with no memory enforcement (matches PR-1 semantics).
+    let cgroup = StepCgroup::try_create(step_index, limits.memory_mb);
+    if let Some(cg) = cgroup.as_ref() {
+        if let Err(e) = cg.attach(child.id()) {
+            tracing_workaround_warn(&format!(
+                "native step {step_index}: cgroup attach failed: {e}; step continues without memory enforcement"
+            ));
+        }
+    }
+
     let stdout_pipe = child.stdout.take().expect("stdout piped");
     let stderr_pipe = child.stderr.take().expect("stderr piped");
     let stdout_thread = thread::spawn(move || read_capped(stdout_pipe, MAX_CAPTURE_BYTES));
@@ -527,6 +542,11 @@ fn execute_native_step(
         )
     };
 
+    // Read OOM state BEFORE the cgroup is dropped (StepCgroup's
+    // Drop calls rmdir, which clears memory.events.local). Cheap
+    // file read; safe to do whether or not setup succeeded.
+    let oom_killed = cgroup.as_ref().is_some_and(StepCgroup::was_oom_killed);
+
     match exit_status {
         Some(status) => {
             // Clean exit — wait for reader threads to drain. Since
@@ -536,6 +556,23 @@ fn execute_native_step(
             let stderr = stderr_thread.join().unwrap_or_default();
             let stdout_hash: [u8; 32] = Sha256::digest(&stdout).into();
             let stderr_hash: [u8; 32] = Sha256::digest(&stderr).into();
+            // Memory cap exceeded (cgroup OOM-kill). Attribute
+            // even if the kernel signaled the child as a normal
+            // SIGKILL — the cgroup's `oom_kill` counter is the
+            // ground truth. The hash binds only
+            // (step, LimitKind::Memory) for symmetry with the
+            // walltime-kill hash; captured bytes are excluded
+            // because partial output before OOM isn't a
+            // determinism contract we want to take on.
+            if oom_killed {
+                return StepOutput {
+                    step_index,
+                    status: StepStatus::LimitExceeded {
+                        which: LimitKind::Memory,
+                    },
+                    output_hash: hash_canonical(&(step, LimitKind::Memory)),
+                };
+            }
             if status.success() {
                 StepOutput {
                     step_index,
@@ -590,6 +627,160 @@ fn execute_native_step(
             }
         }
     }
+}
+
+/// Per-step cgroup-v2 sandbox (#107 PR 2 of N — memory only).
+///
+/// On Linux with cgroup-v2 + user delegation:
+///
+/// 1. Resolve the calling process's cgroup from `/proc/self/cgroup`.
+/// 2. Create a unique sub-cgroup under it.
+/// 3. Write `memory.max` = `memory_mb << 20` bytes.
+/// 4. Caller attaches the child via [`Self::attach`].
+/// 5. After the child exits, [`Self::was_oom_killed`] reads
+///    `memory.events.local` to detect kernel OOM-kill.
+/// 6. `Drop` rmdirs the sub-cgroup (best-effort).
+///
+/// On non-Linux platforms or when cgroup-v2 / delegation isn't
+/// available, [`Self::try_create`] returns `None` and the step
+/// runs with no memory enforcement (matches PR-1 semantics).
+///
+/// Race window: between `Command::spawn` and
+/// `attach(child.id())`, the child runs uncgrouped. For workloads
+/// that allocate >memory_mb in <1ms, this could let the parent
+/// machine's OOM-killer fire before the cgroup is in effect. PR 3
+/// or later may close this with `clone3(CLONE_INTO_CGROUP)`,
+/// which atomically places the new task into the target cgroup.
+struct StepCgroup {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    path: PathBuf,
+}
+
+impl StepCgroup {
+    /// Try to create a per-step cgroup. Returns `None` if
+    /// `memory_mb == 0` (no enforcement requested) or if any
+    /// part of the cgroup setup fails.
+    #[cfg(target_os = "linux")]
+    fn try_create(step_index: u32, memory_mb: u32) -> Option<Self> {
+        if memory_mb == 0 {
+            return None;
+        }
+        let parent = current_cgroup_path()?;
+
+        // Verify the memory controller is delegated. Without
+        // it, writing memory.max silently no-ops.
+        if !subtree_has_controller(&parent, "memory") {
+            tracing_workaround_warn(&format!(
+                "cgroup at {} doesn't delegate the memory controller; step {step_index} runs without memory enforcement",
+                parent.display()
+            ));
+            return None;
+        }
+
+        // Unique sub-cgroup name. PID + step_index +
+        // monotonic ns means concurrent steps in the same
+        // process don't collide.
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let name = format!("cosaci-step-{}-{step_index}-{now_ns}", std::process::id());
+        let path = parent.join(name);
+
+        if let Err(e) = std::fs::create_dir(&path) {
+            tracing_workaround_warn(&format!(
+                "cgroup mkdir at {} failed: {e}; step {step_index} runs without memory enforcement",
+                path.display()
+            ));
+            return None;
+        }
+
+        let mem_max = u64::from(memory_mb).saturating_mul(1024 * 1024);
+        if let Err(e) = std::fs::write(path.join("memory.max"), mem_max.to_string()) {
+            tracing_workaround_warn(&format!("cgroup memory.max write failed: {e}; cleaning up"));
+            let _ = std::fs::remove_dir(&path);
+            return None;
+        }
+
+        Some(Self { path })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
+    fn try_create(_step_index: u32, _memory_mb: u32) -> Option<Self> {
+        None
+    }
+
+    /// Attach the given PID to this cgroup. Writing to
+    /// `cgroup.procs` migrates the entire thread-group of `pid`.
+    #[cfg(target_os = "linux")]
+    fn attach(&self, pid: u32) -> std::io::Result<()> {
+        std::fs::write(self.path.join("cgroup.procs"), pid.to_string())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn attach(&self, _pid: u32) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// True iff the kernel recorded an `oom_kill` event for
+    /// this cgroup (i.e. memory.max was exceeded and the
+    /// kernel's cgroup-OOM killer fired).
+    #[cfg(target_os = "linux")]
+    fn was_oom_killed(&self) -> bool {
+        let Ok(text) = std::fs::read_to_string(self.path.join("memory.events.local")) else {
+            return false;
+        };
+        text.lines()
+            .filter_map(|line| line.strip_prefix("oom_kill "))
+            .any(|rest| rest.trim().parse::<u64>().is_ok_and(|n| n > 0))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn was_oom_killed(&self) -> bool {
+        false
+    }
+}
+
+impl Drop for StepCgroup {
+    fn drop(&mut self) {
+        // Best-effort. If the cgroup still has live processes
+        // (rare — child has exited by this point), rmdir
+        // returns EBUSY and we skip. The leaked cgroup is
+        // auto-reclaimed by systemd when the parent scope ends.
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+/// Resolve the calling process's cgroup-v2 absolute path on
+/// the unified hierarchy. Returns `None` on cgroup-v1, hybrid
+/// systems, or read failure.
+#[cfg(target_os = "linux")]
+fn current_cgroup_path() -> Option<PathBuf> {
+    let text = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    // cgroup-v2 unified hierarchy: a single line of the form
+    // `0::<absolute-path>`. cgroup-v1 lines are `<id>:<controller>:<path>`.
+    // We require the v2 line.
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("0::") {
+            return Some(Path::new("/sys/fs/cgroup").join(rest.trim_start_matches('/')));
+        }
+    }
+    None
+}
+
+/// True iff `cgroup_path/cgroup.subtree_control` enables the
+/// named controller on its children. Without subtree
+/// delegation, writing to `memory.max` etc. silently no-ops.
+#[cfg(target_os = "linux")]
+fn subtree_has_controller(cgroup_path: &Path, controller: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(cgroup_path.join("cgroup.subtree_control")) else {
+        return false;
+    };
+    text.split_whitespace().any(|c| c == controller)
 }
 
 /// Read up to `cap` bytes from `pipe`; drain the rest without
