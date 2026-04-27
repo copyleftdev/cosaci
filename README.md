@@ -3,7 +3,7 @@
 [![CI](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
-[![Audit trail](https://img.shields.io/badge/hypothesis_cards-35%2F38_passing-brightgreen)](hypotheses/index.md)
+[![Audit trail](https://img.shields.io/badge/hypothesis_cards-49%2F51_passing-brightgreen)](hypotheses/index.md)
 [![Rust 2024 / 1.94](https://img.shields.io/badge/rust-1.94_(2024_edition)-orange.svg)](rust-toolchain.toml)
 
 > **CI you can prove ran honestly — on machines you already own.** A
@@ -93,8 +93,20 @@ team independently-verifiable evidence about every other team's builds.
   unsuccessful.
 - **Mutual TLS everywhere.** Coordinator and agents authenticate at
   connect time; CRLs are supported and certs hot-rotate on SIGHUP.
-- **WASM-first sandbox.** Jobs run as WebAssembly modules — deterministic
-  execution, no host filesystem leak, no escape via shared FDs.
+- **Two execution models, one trust chain.** Jobs run as
+  WebAssembly modules (deterministic, no host filesystem leak, no
+  escape via shared FDs) or as native processes under cgroup-v2
+  sandboxing (cpu + memory + walltime — kernel-enforced limits;
+  the OOM killer is the ground truth on memory, polled
+  `cpu.stat::usage_usec` on cpu, watchdog kill on wall). Native
+  execution lets `cargo build` and `pytest` run; WASM execution
+  keeps the deterministic-replay floor.
+- **Signed attestation bundles.** Each runner signs an
+  `Attestation` (commit + environment + output hash) and bundles
+  any per-step captures (stdout/stderr from build commands,
+  hashed and verifiable). Auditors retrieve the bundle by mTLS
+  and re-hash captures locally to verify nothing changed in
+  transit.
 
 ## A concrete day-in-the-life
 
@@ -149,36 +161,69 @@ themselves are under [`contrib/`](contrib/).
 
 ## Project status
 
-**v0.2** is what's in `main` today. The system runs end-to-end over real
-TCP + mTLS with VRF-proof committee selection and arbitrary WASM payloads.
-The 5-library + 3-binary cargo workspace is settled. CI gates on
-clippy-pedantic, missing-docs, fmt, deny, and a live smoke test.
+**v0.5.0** is what's tagged on `main` today (April 2026). Real-pipeline
+execution shipped: signed pipeline-shape submissions, a typed
+multi-step DSL with WASM + native executors, kernel-enforced cgroup-v2
+resource limits, and signed attestation bundles whose captures are
+operator-retrievable via a CLI. End-to-end demo (`demo_networked`)
+runs three rounds — bounded, SIGTERM-drain, stdin NDJSON — over real
+TCP + mTLS, with a per-tenant auth gate on every submission.
 
-**v0.3** is scoped (see `docs/ROADMAP.md`):
-- Real job submission interface (stdin → socket → optional REST).
-- Persistent attestation log on disk.
-- Capability-aware committee selection.
-- Slashing on detected dishonest attestations.
-- Three gated infrastructure-side test harnesses (netem, swtpm, recorded
-  GitHub fixtures).
+**Audit trail at v0.5.0:** 38 class-A + 6 class-B-stat + 4 class-C + 3
+class-D = 51 hypothesis cards / 49 passing. **All A + B-stat: 44 / 44
+passing**, no deferred sub-claims. The two non-passing C-class cards
+(`real-partition-recovery`, `tee-attestation`) are infrastructure-gated
+on netem/Jepsen and TPM/SGX/SEV harnesses that aren't part of the
+default test environment; they live under v1.0.
 
-**v1.0** is when the spec is stable, the operator runbook exists, and at
-least one external consumer is running it.
+**v0.6** is scoped:
+- Mount namespace + read-only rootfs + egress enforcement (the
+  hostile-tenant story; needs a new `cosaci-sandbox` crate with an
+  audited unsafe budget so `cosaci-jobs` can stay
+  `forbid(unsafe_code)`). Tracked under #107.
+- Coord-side and agent-side async runtime rewrite using the
+  `proto_async` + `tls_async` foundations shipped in v0.3. Real
+  concurrent job execution (`--max-concurrent-jobs N > 1`).
+  Prometheus + OTLP exporters. Tracked under #102 — #105.
+- `Step::CaptureArtifact` + an on-disk Merkle-log manifest entry
+  pointing at captures (#108 follow-on).
+
+**v1.0** is when the wire protocol is stable, the operator runbook
+covers production cutover, and at least one external consumer is
+running it.
 
 ## Under the hood
 
-The library is built on five focused crates:
+The library is split across seven focused crates:
 
 - **`cosaci-core`** — pure algebra: signing, attestation canonicalization,
-  Merkle log, quorum aggregation, status DAG, gossip CRDT, bloom filter.
-- **`cosaci-state`** — stateful subsystems: leases, registry, partitioned
-  cluster, sharded store, replay window, rate limiter.
-- **`cosaci-protocol`** — wire protocol (CBOR envelopes) and mTLS
-  transport (rustls + rcgen + CRL support).
+  Merkle log, quorum aggregation, status DAG, gossip CRDT, bloom filter,
+  retrieval bundles.
+- **`cosaci-state`** — stateful subsystems: tenant registry, leases,
+  partitioned cluster, sharded store, replay window, rate limiter,
+  submission auth gate, admin auth gate, enrollment, stake ledger,
+  journal.
+- **`cosaci-protocol`** — wire protocol (CBOR envelopes — sync + async)
+  and mTLS transport (rustls + rcgen + CRL support, sync + async
+  flavors).
 - **`cosaci-vrf`** — schnorrkel sr25519 VRF.
-- **`cosaci-wasm`** — wasmtime-backed sandbox harness.
+- **`cosaci-wasm`** — wasmtime-backed sandbox harness with fuel +
+  memory + epoch limits.
+- **`cosaci-jobs`** — typed pipeline DSL: `Step::SourceFetch /
+  ExecWasm / ExecNative / CaptureLog / CaptureArtifact`. The native
+  executor wires cgroup-v2 enforcement directly via
+  `/sys/fs/cgroup` file I/O — no `unsafe` in the crate.
+- **`cosaci-webhook`** — GitHub + GitLab webhook translation with
+  HMAC verification, freshness window, and `.cosaci.toml` placeholder
+  resolution.
 
-Three binaries: `coordinator`, `agent`, and the `demo` runners.
+Five binaries: **`coordinator`** (the work-routing process),
+**`agent`** (a runner), **`cosaci-admin`** (the operator CLI:
+enrollment, tenant registry, log inspection, capture retrieval),
+**`cosaci-webhook-listener`** (translates GitHub/GitLab pushes into
+signed pipeline submissions), and **`demo`** / **`demo_networked`**
+/ **`verify`** under `cosaci-demo` (the live end-to-end smoke test
++ auditor harness).
 
 ## Method
 
@@ -202,12 +247,12 @@ The `cargo test` in this repo is the act of running the filter.
 | `SPEC.md`                 | The 17-section falsifiable spec.                            |
 | `hypotheses/index.md`     | Audit table — every spec claim mapped to card and test.     |
 | `hypotheses/<id>.md`      | One claim per card; class A / B-stat / C / D + status.      |
-| `crates/cosaci-*/`        | Five focused libraries.                                     |
-| `bins/cosaci-*/`          | Three binaries: coordinator, agent, demo.                   |
+| `crates/cosaci-*/`        | Seven focused libraries.                                    |
+| `bins/cosaci-*/`          | Five binaries: coordinator, agent, admin, webhook-listener, demo. |
 | `tests/`                  | Property tests; one file per hypothesis card.               |
 | `benches/hot_paths.rs`    | Criterion baselines on the trust-chain hot paths.           |
 | `docs/ARCHITECTURE.md`    | Layered model, trust chain, dep graph, primitive choices.   |
-| `docs/ROADMAP.md`         | v0.2 / v0.3 / v1.0 milestones and issue lists.              |
+| `docs/ROADMAP.md`         | v0.5 / v0.6 / v1.0 milestones and issue lists.              |
 | `CONTRIBUTING.md`         | The bar for new contributions.                              |
 | `CHANGELOG.md`            | Per-release detail.                                         |
 

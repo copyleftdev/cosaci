@@ -70,13 +70,14 @@ use cosaci_wasm::wasm_runtime::{canned_add_module, canned_mul_module, encode_arg
 /// directly from the raw line into the chosen struct, which
 /// goes through serde_json's number path and preserves u128.
 ///
-/// The legacy variant remains the only one the run loop
-/// executes today — pipeline-shape submissions are gated
-/// through `verify_and_admit_pipeline` and then **dropped**
-/// at the reader, with a log line tagged `TODO #106 PR 3 of N`
-/// until the executor wiring lands. They still consume rate-
-/// limit tokens and burn replay nonces, so the auth posture
-/// is production-ready ahead of the executor.
+/// Both variants execute end-to-end through the run loop
+/// (#106 PR 3 of N, merged in v0.5.0). Legacy lines build
+/// a single-step ExecWasm pipeline at the reader using the
+/// canned add/mul modules; pipeline lines decode
+/// `pipeline_cbor_hex` directly into a
+/// `cosaci_jobs::Pipeline`. Either way the run loop sees one
+/// shape: a queue-ready `RunSubmission` carrying a
+/// `cosaci_jobs::Pipeline` ready to execute.
 #[derive(Debug, Clone)]
 enum JobSubmission {
     Legacy(LegacyJobSubmission),
