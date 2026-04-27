@@ -10,10 +10,93 @@ bumps. v1.0 onward, each crate versions independently.
 
 ## [Unreleased]
 
-Reserved for v0.4 work (concurrent-job runtime rewrite of the
-coordinator + agent async rewrite). The async wire primitives
-and TLS helpers shipped in v0.3 are the foundation; the
-coord-side rewrite that exploits them is the next milestone.
+Reserved for the next milestone. Two threads are queued:
+
+- **Async runtime rewrite** (was v0.4 milestone, now re-sequenced
+  as a v0.6 follow-on). Coord-side + agent-side tokio rewrite +
+  real concurrent-job execution + Prometheus/OTLP exporters.
+  Issues #102, #103, #104, #105 — all open.
+- **ExecNative hostile-tenant story** (#107 PR 4-5): mount
+  namespace + read-only rootfs + egress enforcement (netns +
+  iptables / eBPF cgroup-attached filter). Needs a new
+  `cosaci-sandbox` crate with an audited unsafe budget;
+  `cosaci-jobs` stays `forbid(unsafe_code)`.
+
+## [0.5.0] — 2026-04-27
+
+**Real-pipeline execution.** The v0.5 milestone closes the
+gap between "typed pipeline DSL" (v0.3) and "real CI workloads
+running with kernel-enforced sandboxing." A signed
+pipeline-shape NDJSON submission now flows through the auth
+gate, gets decoded server-side, dispatched to a committee, and
+runs as a real `Step::ExecNative` child process under cgroup-v2
+memory + cpu enforcement; `Step::CaptureLog` gathers the
+child's stdout/stderr into the signed `AttestationBundle`,
+which the coord persists and serves back via a new
+`cosaci-admin captures get` retrieval CLI.
+
+**Audit trail at release:** 38 A + 6 B-stat + 4 C + 3 D =
+**51 cards · 49 passing**. New tier-0 cards this milestone:
+`pipeline-submission`, `exec-native-determinism`,
+`capture-log-determinism`. All A and B-stat cards: **44/44
+passing** with no deferred sub-claims. C: 2/4 passing
+(unchanged). D: 3/3 passing.
+
+**v0.5 highlights** (per-issue PR refs in the entries below):
+
+- **Full-pipeline wire submission** (#106). The wire submit
+  shape lifts from `{kind, a, b}` to a typed
+  `cosaci_jobs::Pipeline`; the auth gate gets a parallel
+  `verify_and_admit_pipeline` (cross-shape unforgeability is
+  the load-bearing claim); the coord stdin reader dispatches
+  on the wire shape via a hand-rolled
+  `parse_submission_line` (untagged enums silently round-trip
+  u128 nonces through f64 — class regression). End-to-end
+  witnessed in `demo_networked` pass 3:
+  `shape=pipeline step(s)=1 ... outcome Pass`.
+- **`Step::ExecNative` plain executor** (#107 PR 1-3). Spawn
+  + bounded stdout/stderr capture (16 MiB cap) + walltime
+  enforcement (50 ms-poll watchdog) + cgroup-v2 `memory.max`
+  with kernel OOM-kill detection + cgroup-v2 cpu-time
+  enforcement via polled `cpu.stat::usage_usec`.
+  Determinism contract: `output_hash` binds (step, status,
+  exit_code, sha256(stdout), sha256(stderr)) on clean exit;
+  binds (step, LimitKind) on each kill path. cosaci-jobs
+  stays `#![forbid(unsafe_code)]`.
+- **`Step::CaptureLog` + `AttestationBundle`** (#108).
+  Captures emitted into `PipelineResult::captures`; agent
+  bundles them into a wire `AttestationBundle`; coord
+  persists to `<captures-dir>/<job_id>/<runner_id>.cbor`
+  on signature-valid receive (gated on `sig_ok`); read API
+  serves `GetCaptures` / `CapturesResponse` /
+  `CapturesNotFound`; `cosaci-admin captures get` is the
+  operator-facing retrieval CLI.
+- **Local CI script + opt-in pre-push hook** (#111).
+  `scripts/ci-local.sh` runs the same gate steps as
+  `.github/workflows/ci.yml`; opt-in via
+  `git config core.hooksPath .githooks`. Useful when the
+  org's hosted-Actions minutes are exhausted.
+
+**Out of scope (v0.6+):**
+- **#107 PR 4-5** — mount namespace + read-only rootfs +
+  egress enforcement. Needs new `cosaci-sandbox` crate
+  with audited unsafe budget. Hostile-tenant story.
+- **#108 follow-ons** — `demo_networked` retrieval E2E
+  (depends on cross-chain merge), on-disk Merkle log
+  manifest entry pointing at captures, per-step
+  `max_log_bytes` operator override, `Step::CaptureArtifact`
+  (workdir-routing dependency).
+- **v0.4 milestone** items (re-sequenced): coord-side and
+  agent-side async runtime rewrite, real concurrent-job
+  execution, Prometheus + OTLP exporters.
+
+**Wire-protocol break:** `Envelope::SubmitAttestation`'s
+payload changed from `Attestation` to `AttestationBundle`
+(#117). Pre-1.0 protocol; pre-#108 agents will fail to
+encode against post-#108 coords. Rolling-deploy story is a
+v1.0 concern.
+
+---
 
 ## [0.3.0] — 2026-04-26
 
