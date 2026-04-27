@@ -209,6 +209,59 @@ pub struct PipelineResult {
     /// surfaces at the quorum layer without needing per-step
     /// inspection.
     pub final_artifact_hash: [u8; 32],
+    /// Per-step captures emitted by [`Step::CaptureLog`] or
+    /// [`Step::CaptureArtifact`] (#108). **Not** part of
+    /// `final_artifact_hash` — the canonical attestation hash
+    /// binds only `steps`, so capture payload size doesn't
+    /// shift the hash and capture/no-capture pipelines remain
+    /// committee-comparable.
+    ///
+    /// Skipped at serialization when empty; an existing
+    /// pre-#108 producer that emits no captures yields the
+    /// same wire bytes as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<CapturedOutput>,
+}
+
+/// One captured payload emitted by a `CaptureLog` /
+/// `CaptureArtifact` step. The bytes travel alongside the
+/// signed `Attestation` in the wire-level `AttestationBundle`
+/// (lands in a follow-on PR); on the agent side they live in
+/// [`PipelineResult::captures`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturedOutput {
+    /// 0-indexed position of the capture **step** in the
+    /// pipeline (the `Step::CaptureLog` step itself, not the
+    /// step whose output is being captured).
+    pub step_index: u32,
+    /// Operator-chosen handle from the `Step`'s `name` field;
+    /// stdout/stderr captures append `.stdout`/`.stderr` to
+    /// disambiguate.
+    pub name: String,
+    /// What kind of bytes this carries.
+    pub kind: CaptureKind,
+    /// SHA-256 of the captured bytes (post-truncation if a
+    /// cap was applied — the hash matches the bytes inline).
+    pub sha256: [u8; 32],
+    /// Total length of the original output before any
+    /// truncation. May exceed `bytes_inline.len()` if a cap
+    /// was applied; the difference is observable.
+    pub length: u64,
+    /// Captured bytes, up to the per-step `max_log_bytes`
+    /// cap. If the original output exceeded the cap, this
+    /// holds the prefix only.
+    pub bytes_inline: Vec<u8>,
+}
+
+/// Kind of capture in a [`CapturedOutput`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaptureKind {
+    /// Captured stdout from a `Step::ExecNative`.
+    Stdout,
+    /// Captured stderr from a `Step::ExecNative`.
+    Stderr,
+    /// Captured file artifact (lands with `Step::CaptureArtifact`).
+    Artifact,
 }
 
 /// Errors the pipeline executor can return.
@@ -298,6 +351,13 @@ pub fn canonical_encoding(pipeline: &Pipeline) -> Result<Vec<u8>, PipelineError>
 /// are encoded as terminal `StepStatus` values.
 pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineError> {
     let mut step_outputs: Vec<StepOutput> = Vec::with_capacity(pipeline.steps.len());
+    let mut captures: Vec<CapturedOutput> = Vec::new();
+    // Holds the most recent `Step::ExecNative`'s captured
+    // stdout/stderr so a following `Step::CaptureLog` can
+    // emit them. Reset whenever a new ExecNative runs;
+    // unrelated step types (ExecWasm, SourceFetch) don't
+    // touch it. None means "no preceding ExecNative".
+    let mut last_native: Option<NativeCaptures> = None;
 
     for (idx, step) in pipeline.steps.iter().enumerate() {
         let step_index = idx as u32;
@@ -314,8 +374,19 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
                 command,
                 env,
                 limits,
-            } => execute_native_step(step_index, command, env, limits, step),
-            Step::CaptureLog { .. } => not_implemented(step_index, step, StepKind::CaptureLog),
+            } => {
+                let (out, native_caps) =
+                    execute_native_step(step_index, command, env, limits, step);
+                last_native = Some(native_caps);
+                out
+            }
+            Step::CaptureLog { name } => execute_capture_log_step(
+                step_index,
+                name,
+                last_native.as_ref(),
+                &mut captures,
+                step,
+            ),
             Step::CaptureArtifact { .. } => {
                 not_implemented(step_index, step, StepKind::CaptureArtifact)
             }
@@ -327,7 +398,75 @@ pub fn execute_pipeline(pipeline: &Pipeline) -> Result<PipelineResult, PipelineE
     Ok(PipelineResult {
         steps: step_outputs,
         final_artifact_hash,
+        captures,
     })
+}
+
+/// Captured bytes from one `Step::ExecNative`. Lives
+/// in-memory between the ExecNative step and any following
+/// `Step::CaptureLog`. Holds full bytes (already capped at
+/// `MAX_CAPTURE_BYTES` by the executor) plus the stable
+/// SHA-256 each pipe was bound to in the ExecNative's
+/// `output_hash`.
+struct NativeCaptures {
+    stdout_bytes: Vec<u8>,
+    stdout_sha256: [u8; 32],
+    stderr_bytes: Vec<u8>,
+    stderr_sha256: [u8; 32],
+}
+
+/// Executor for `Step::CaptureLog`. Reads the most recent
+/// `Step::ExecNative`'s stdout + stderr (if any) and emits
+/// two `CapturedOutput` records, named `<name>.stdout` and
+/// `<name>.stderr`. With no preceding ExecNative, the step
+/// is `Failed` deterministically — no bytes to capture.
+fn execute_capture_log_step(
+    step_index: u32,
+    name: &str,
+    last_native: Option<&NativeCaptures>,
+    captures: &mut Vec<CapturedOutput>,
+    step: &Step,
+) -> StepOutput {
+    let Some(nc) = last_native else {
+        let detail = format!(
+            "capture_log step {step_index} ('{name}'): no preceding ExecNative; nothing to capture"
+        );
+        tracing_workaround_warn(&detail);
+        return StepOutput {
+            step_index,
+            status: StepStatus::Failed,
+            output_hash: hash_canonical(&(step, "no_preceding_exec_native")),
+        };
+    };
+
+    captures.push(CapturedOutput {
+        step_index,
+        name: format!("{name}.stdout"),
+        kind: CaptureKind::Stdout,
+        sha256: nc.stdout_sha256,
+        length: nc.stdout_bytes.len() as u64,
+        bytes_inline: nc.stdout_bytes.clone(),
+    });
+    captures.push(CapturedOutput {
+        step_index,
+        name: format!("{name}.stderr"),
+        kind: CaptureKind::Stderr,
+        sha256: nc.stderr_sha256,
+        length: nc.stderr_bytes.len() as u64,
+        bytes_inline: nc.stderr_bytes.clone(),
+    });
+
+    // Hash binds the step + the two source hashes. Two
+    // runners that observed the same ExecNative output and
+    // the same `name` produce the same CaptureLog
+    // output_hash; bytes themselves don't go in the hash
+    // (they're already bound transitively through the
+    // ExecNative step's `output_hash`).
+    StepOutput {
+        step_index,
+        status: StepStatus::Success,
+        output_hash: hash_canonical(&(step, "ok", nc.stdout_sha256, nc.stderr_sha256)),
+    }
 }
 
 fn execute_source_fetch_step(
@@ -477,15 +616,25 @@ fn execute_native_step(
     env: &BTreeMap<String, String>,
     limits: &Limits,
     step: &Step,
-) -> StepOutput {
+) -> (StepOutput, NativeCaptures) {
+    let empty_sha256: [u8; 32] = Sha256::digest([]).into();
+    let empty_caps = || NativeCaptures {
+        stdout_bytes: Vec::new(),
+        stdout_sha256: empty_sha256,
+        stderr_bytes: Vec::new(),
+        stderr_sha256: empty_sha256,
+    };
     if command.is_empty() {
         let detail = format!("native step {step_index}: empty command");
         tracing_workaround_warn(&detail);
-        return StepOutput {
-            step_index,
-            status: StepStatus::Failed,
-            output_hash: hash_canonical(&(step, "empty_command")),
-        };
+        return (
+            StepOutput {
+                step_index,
+                status: StepStatus::Failed,
+                output_hash: hash_canonical(&(step, "empty_command")),
+            },
+            empty_caps(),
+        );
     }
 
     let mut cmd = Command::new(&command[0]);
@@ -507,11 +656,14 @@ fn execute_native_step(
             // identical "command not found" failures hash equally
             // across runners but distinct from a successful run.
             let kind_id = e.kind() as i32;
-            return StepOutput {
-                step_index,
-                status: StepStatus::Failed,
-                output_hash: hash_canonical(&(step, "spawn_failed", kind_id)),
-            };
+            return (
+                StepOutput {
+                    step_index,
+                    status: StepStatus::Failed,
+                    output_hash: hash_canonical(&(step, "spawn_failed", kind_id)),
+                },
+                empty_caps(),
+            );
         }
     };
 
@@ -565,20 +717,29 @@ fn execute_native_step(
             // even if the kernel signaled the child as a normal
             // SIGKILL — the cgroup's `oom_kill` counter is the
             // ground truth. The hash binds only
-            // (step, LimitKind::Memory) for symmetry with the
-            // walltime-kill hash; captured bytes are excluded
-            // because partial output before OOM isn't a
-            // determinism contract we want to take on.
+            // (step, LimitKind::Memory); captures emit as
+            // `empty_caps()` for symmetry with the wall/cpu
+            // paths (partial output before OOM isn't a
+            // determinism contract we want to take on).
             if oom_killed {
-                return StepOutput {
-                    step_index,
-                    status: StepStatus::LimitExceeded {
-                        which: LimitKind::Memory,
+                return (
+                    StepOutput {
+                        step_index,
+                        status: StepStatus::LimitExceeded {
+                            which: LimitKind::Memory,
+                        },
+                        output_hash: hash_canonical(&(step, LimitKind::Memory)),
                     },
-                    output_hash: hash_canonical(&(step, LimitKind::Memory)),
-                };
+                    empty_caps(),
+                );
             }
-            if status.success() {
+            let caps = NativeCaptures {
+                stdout_bytes: stdout,
+                stdout_sha256: stdout_hash,
+                stderr_bytes: stderr,
+                stderr_sha256: stderr_hash,
+            };
+            let out = if status.success() {
                 StepOutput {
                     step_index,
                     status: StepStatus::Success,
@@ -603,7 +764,8 @@ fn execute_native_step(
                         stderr_hash,
                     )),
                 }
-            }
+            };
+            (out, caps)
         }
         ExitOutcome::KilledByWall | ExitOutcome::KilledByCpu => {
             // Limit exceeded; child was killed by us. We do NOT
@@ -627,11 +789,14 @@ fn execute_native_step(
                 ExitOutcome::KilledByCpu => LimitKind::Cpu,
                 ExitOutcome::Exited(_) => unreachable!(),
             };
-            StepOutput {
-                step_index,
-                status: StepStatus::LimitExceeded { which },
-                output_hash: hash_canonical(&(step, which)),
-            }
+            (
+                StepOutput {
+                    step_index,
+                    status: StepStatus::LimitExceeded { which },
+                    output_hash: hash_canonical(&(step, which)),
+                },
+                empty_caps(),
+            )
         }
     }
 }

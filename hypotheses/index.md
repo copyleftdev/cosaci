@@ -45,6 +45,7 @@ P1 = sharded Raft + gossip  ·  P2 = pubkey + stake-weighted  ·  P3 = VRF  ·  
 | `admin-auth-gate` | §13 (admin extension) | A | **passing** | `tests/admin_auth_gate.rs` | submission-auth-gate + mtls (#53 follow-on) |
 | `pipeline-submission` | §13 (v0.5 lift) / §6.2 | A | **passing** | `tests/submission_auth_gate.rs` | submission-auth-gate + pipeline-determinism (#106) |
 | `exec-native-determinism` | §6.2 / §6.3 | A | **passing** | `tests/exec_native.rs` | std::process (#107 PR 1 of N) |
+| `capture-log-determinism` | §10.1 / §6.2 | A | **passing** | `tests/capture_log.rs` | exec-native-determinism (#108 PR 1 of N) |
 
 ## Tier 1 — Scale primitives (9 cards, all A)
 
