@@ -188,6 +188,40 @@ pub enum Envelope {
         /// Number of entries in the log.
         length: u64,
     },
+    /// Request the captures persisted for a `(job_id, runner_id)`
+    /// pair (#108 PR 3 of N). Coord responds with
+    /// [`Envelope::CapturesResponse`] on hit, [`Envelope::CapturesNotFound`]
+    /// on miss. Captures are persisted by the coord whenever an
+    /// `AttestationBundle` carrying non-empty captures is received
+    /// (and `--captures-dir` is configured).
+    GetCaptures {
+        /// Job to look up.
+        job_id: u64,
+        /// Which committee member's submission to fetch. Different
+        /// runners produce different captures even for the same job.
+        runner_id: u64,
+    },
+    /// Coordinator's response to [`Envelope::GetCaptures`] on hit.
+    CapturesResponse {
+        /// The original `(job_id, runner_id)` for symmetry on the
+        /// auditor side.
+        job_id: u64,
+        /// Which committee member produced these captures.
+        runner_id: u64,
+        /// Captures as the agent originally bundled them.
+        captures: Vec<CapturedOutput>,
+    },
+    /// Coordinator's response to [`Envelope::GetCaptures`] on miss.
+    /// Possible reasons: the coord has no record of `(job_id,
+    /// runner_id)`, captures were never persisted (the agent's
+    /// bundle had `captures.is_empty()`), or `--captures-dir` was
+    /// not set on this coord.
+    CapturesNotFound {
+        /// The `(job_id, runner_id)` that was requested.
+        job_id: u64,
+        /// Same.
+        runner_id: u64,
+    },
 
     // ── Admin wire protocol (issue #53 follow-on) ──────────────────────
     /// Admin client → Coordinator: open an authenticated admin

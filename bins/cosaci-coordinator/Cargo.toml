@@ -26,6 +26,10 @@ signal-hook        = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[dev-dependencies]
+sha2     = { workspace = true }
+tempfile = { workspace = true }
+
 # `coordinator` (not `cosaci-coordinator`) — the demo_networked subprocess
 # launcher and existing CLI examples expect this short name.
 [[bin]]

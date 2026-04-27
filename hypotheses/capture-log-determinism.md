@@ -118,17 +118,71 @@ bound by each record's own `sha256`. A verifier checks
 
 Falsifications: `crates/cosaci-protocol/tests/attestation_bundle_wire.rs` (4 tests, all pointwise).
 
+## Persistence + retrieval (#108 PR 3 of N)
+
+When `--captures-dir <path>` is set on the coordinator and a
+signature-valid `AttestationBundle` arrives with non-empty
+captures, the coord persists them to disk:
+
+```text
+<captures-dir>/<job_id>/<runner_id>.cbor
+```
+
+— ciborium-encoded `Vec<CapturedOutput>`. One file per
+committee member's submission per job.
+
+The read API (the same `--read-addr` mTLS surface that
+serves `GetJob` / `GetLogRoot`) gains three envelope variants:
+
+```rust
+GetCaptures { job_id, runner_id }
+CapturesResponse { job_id, runner_id, captures }
+CapturesNotFound { job_id, runner_id }
+```
+
+A request hits the on-disk file via `load_captures`; misses
+(no file, decode failure, or `--captures-dir` unset) yield
+`CapturesNotFound`. **Persistence is gated on `sig_ok`** —
+captures from a runner with mTLS but a bad signing key are
+logged but NOT persisted. That keeps the archive verifiable:
+every captures file on disk corresponds to a signature-valid
+attestation that's also recorded in the journal.
+
+### Persistence + retrieval falsifiable claims
+
+- **Persist+load round-trip**: `persist_captures` writes,
+  `load_captures` reads back byte-equal `Vec<CapturedOutput>`.
+- **Layout is per-job-per-runner**: `<root>/<job>/<runner>.cbor`.
+  Concurrent submissions from different committee members
+  under the same job don't collide.
+- **Missing file ⇒ None**: `load_captures` for a non-existent
+  (job, runner) returns `None` → `CapturesNotFound`.
+- **Wire-level**: `GetCaptures` / `CapturesResponse` /
+  `CapturesNotFound` round-trip through the same write/read
+  framing as the rest of the protocol.
+
+Tests: `bins/cosaci-coordinator/src/main.rs::captures_persistence_tests`
+(4 unit), `crates/cosaci-protocol/tests/attestation_bundle_wire.rs`
+(7 — 4 from PR 2 + 3 new for the request/response variants).
+
 ## Out of scope (follow-on)
+
+- **`cosaci-admin captures` sub-command** — operator-facing
+  CLI for ad-hoc capture retrieval. Wire is in place; CLI
+  is a focused follow-on.
+- **`demo_networked` E2E for retrieval** — extend the
+  smoke test to fire `GetCaptures` after pass 3 and
+  cross-check against what the agent submitted.
+- **On-disk Merkle log manifest entry** pointing at
+  captures. They persist per-file today; promotion to a
+  Merkle-anchored manifest is the next durability layer.
 - **Per-step `max_log_bytes` operator override**: today
   the cap is the hard-coded `MAX_CAPTURE_BYTES` (16 MiB).
-  An operator-tunable knob on `Limits` lands later.
-- **CaptureArtifact**: reads a file from the previous
-  step's workdir. Blocked on a real workdir-routing story
-  (the SourceFetch → ExecNative workdir hand-off, currently
-  not threaded through). Lands in a subsequent #108 PR.
+- **`Step::CaptureArtifact`**: reads a file from the
+  previous step's workdir. Blocked on a real workdir-
+  routing story (SourceFetch → ExecNative workdir
+  hand-off, currently not threaded through).
 - **Truncation determinism**: a stdout > 16 MiB is
   silently capped today. The `length` field reflects the
   pre-truncation total, but the `sha256` is over the
-  truncated prefix. Documented but not yet a falsifiable
-  property test (would need a fixture binary that emits
-  > 16 MiB deterministically — heavier than this PR).
+  truncated prefix. Not yet a property test.
