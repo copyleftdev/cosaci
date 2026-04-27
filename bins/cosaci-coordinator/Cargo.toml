@@ -18,6 +18,7 @@ cosaci-protocol = { path = "../../crates/cosaci-protocol" }
 cosaci-state    = { path = "../../crates/cosaci-state" }
 cosaci-vrf      = { path = "../../crates/cosaci-vrf" }
 cosaci-wasm        = { path = "../../crates/cosaci-wasm" }
+ciborium           = { workspace = true }
 rustls             = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }

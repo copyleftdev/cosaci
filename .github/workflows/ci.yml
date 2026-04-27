@@ -108,6 +108,12 @@ jobs:
           # tenants registry must load and the signed submissions
           # must verify.
           grep -q "auth gate enabled" <<<"$OUT"
+          # Pass 3 also exercises the issue #106 v0.5 pipeline-shape
+          # submission lift: the launcher pipes a third NDJSON line
+          # with `pipeline_cbor_hex`, the coord auth-gates it through
+          # `verify_and_admit_pipeline`, decodes the CBOR, and runs
+          # the resulting `cosaci_jobs::Pipeline` end-to-end.
+          grep -q "shape=pipeline step(s)=1" <<<"$OUT"
           grep -q "All three rounds completed cleanly" <<<"$OUT"
 
   # Audit gate (issue #10): hard fail on advisories / unapproved

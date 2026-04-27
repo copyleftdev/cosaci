@@ -147,6 +147,37 @@ struct PipelineJobSubmission {
     signature_hex: Option<String>,
 }
 
+/// What the run loop dequeues: a fully-resolved `Pipeline`
+/// plus enough metadata to log + record. The reader thread
+/// translates both wire shapes into this — legacy
+/// `{kind,a,b}` becomes a single-step ExecWasm pipeline
+/// using a canned WASM module; pipeline-shape submissions
+/// decode `pipeline_cbor_hex` directly. The run loop is
+/// shape-agnostic from here on (issue #106 PR 3 of N).
+#[derive(Debug, Clone)]
+struct RunSubmission {
+    pipeline: cosaci_jobs::Pipeline,
+    deadline_secs: u32,
+    /// Which wire shape produced this submission, for the
+    /// info log line. Not used in dispatch.
+    origin: SubmissionOrigin,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SubmissionOrigin {
+    Legacy,
+    Pipeline,
+}
+
+impl RunSubmission {
+    fn shape_label(&self) -> &'static str {
+        match self.origin {
+            SubmissionOrigin::Legacy => "legacy",
+            SubmissionOrigin::Pipeline => "pipeline",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum JobKind {
@@ -484,12 +515,14 @@ fn main() -> std::io::Result<()> {
     // sender when stdin EOFs; the main loop's `recv` returns Err
     // and the coord drains.
     let submission_rx = if submit_stdin {
-        // Only legacy-shape submissions enter the run-loop queue.
-        // Pipeline-shape submissions are dispatched (gated +
-        // logged-and-dropped) inside the reader thread, ahead of
-        // the queue, until #106 PR 3 lands the executor wiring.
-        let (tx, rx) = sync_channel::<LegacyJobSubmission>(queue_cap);
-        spawn_stdin_reader(tx, auth_state.clone());
+        // The queue carries already-resolved pipelines. Legacy
+        // `{kind,a,b}` submissions are translated to a single-step
+        // ExecWasm pipeline at the reader (using the canned modules);
+        // pipeline-shape submissions decode `pipeline_cbor_hex` to a
+        // `cosaci_jobs::Pipeline` at the reader. Either way the run
+        // loop sees one shape: a Pipeline ready to execute.
+        let (tx, rx) = sync_channel::<RunSubmission>(queue_cap);
+        spawn_stdin_reader(tx, auth_state.clone(), add_wasm.clone(), mul_wasm.clone());
         tracing::info!(
             "[coordinator] --submit-stdin enabled (queue cap {queue_cap}); reading NDJSON job submissions from stdin"
         );
@@ -502,7 +535,7 @@ fn main() -> std::io::Result<()> {
 
     'outer: while completed < max_jobs && !draining.load(Ordering::Relaxed) {
         let job_id = completed + 1;
-        let (module, args) = if let Some(rx) = submission_rx.as_ref() {
+        let pipeline = if let Some(rx) = submission_rx.as_ref() {
             // Stdin-submitted jobs (issue #32). `recv_timeout` lets
             // the loop notice SIGTERM/SIGINT between submissions
             // instead of blocking forever on an idle stdin.
@@ -522,18 +555,12 @@ fn main() -> std::io::Result<()> {
                 }
             };
             tracing::info!(
-                "[coordinator] job {job_id} submitted: kind={:?} a={} b={} deadline_secs={}",
-                sub.kind,
-                sub.a,
-                sub.b,
-                sub.deadline_secs
+                "[coordinator] job {job_id} submitted: shape={} step(s)={} deadline_secs={}",
+                sub.shape_label(),
+                sub.pipeline.steps.len(),
+                sub.deadline_secs,
             );
-            let module = match sub.kind {
-                JobKind::Add => &add_wasm,
-                JobKind::Mul => &mul_wasm,
-            };
-            let args = encode_args(sub.a, sub.b).expect("encode args");
-            (module, args)
+            sub.pipeline
         } else {
             // Legacy: round-robin canned add/mul with the
             // `--a` / `--b` flag pair.
@@ -543,21 +570,19 @@ fn main() -> std::io::Result<()> {
                 &mul_wasm
             };
             let args = encode_args(job_a, job_b).expect("encode args");
-            (module, args)
-        };
-        let pipeline = cosaci_jobs::Pipeline {
-            steps: vec![cosaci_jobs::Step::ExecWasm {
-                module: module.clone(),
-                args_cbor: args,
-                limits: cosaci_jobs::Limits::default(),
-            }],
+            cosaci_jobs::Pipeline {
+                steps: vec![cosaci_jobs::Step::ExecWasm {
+                    module: module.clone(),
+                    args_cbor: args,
+                    limits: cosaci_jobs::Limits::default(),
+                }],
+            }
         };
         match run_one_job(
             job_id,
             committee_size,
             pipeline,
             demo_requirements.clone(),
-            module,
             &mut agents,
             &mut stake_ledger,
             slash_fraction,
@@ -706,7 +731,6 @@ fn run_one_job(
     committee_size: usize,
     pipeline: cosaci_jobs::Pipeline,
     requirements: JobRequirements,
-    log_module: &[u8],
     agents: &mut [RegisteredAgent],
     stake_ledger: &mut StakeLedger,
     slash_fraction: f32,
@@ -721,11 +745,13 @@ fn run_one_job(
     journal_append(journal, &JournalEntry::JobSubmitted { job_id });
 
     let job_seed = job_seed_bytes(job_id);
-    // log_module is the leading WASM module bytes — used only for the
-    // human-readable hash prefix in the log line. Once jobs carry
-    // arbitrary pipelines the log line should switch to the pipeline's
-    // canonical hash.
-    let mh = cosaci_wasm::wasm_runtime::module_hash(log_module);
+    // Pipeline-canonical SHA-256 (#106 PR 3 of N). v0.3 used the leading
+    // module bytes' hash for the log line; with the v0.5 lift the
+    // pipeline carries its own structure and hashing the canonical CBOR
+    // is the stable identifier for any shape.
+    let pipeline_canonical = cosaci_jobs::canonical_encoding(&pipeline)
+        .expect("canonical_encoding of in-memory Pipeline must succeed");
+    let mh = cosaci_wasm::wasm_runtime::module_hash(&pipeline_canonical);
 
     // ── Phase 2a: VRF round — ask every agent for VRF(job_seed) ────────
     // The committee is chosen by the actual VRF outputs, not by hashing
@@ -817,9 +843,9 @@ fn run_one_job(
         return Ok(());
     };
     tracing::info!(
-        "[coordinator] job {job_id} committee: {committee:?} module={:02x?}… ({} bytes), pipeline ({} step(s))",
+        "[coordinator] job {job_id} committee: {committee:?} pipeline_hash={:02x?}… ({} canonical-bytes, {} step(s))",
         &mh[..4],
-        log_module.len(),
+        pipeline_canonical.len(),
         pipeline.steps.len()
     );
 
@@ -1111,8 +1137,10 @@ const REPLAY_TTL_NS: u64 = 5 * 60 * 1_000_000_000;
 /// before it can enter the queue. Failed auth verdicts log a
 /// reason at the warn level and the submission is dropped.
 fn spawn_stdin_reader(
-    tx: SyncSender<LegacyJobSubmission>,
+    tx: SyncSender<RunSubmission>,
     auth_state: Option<Arc<Mutex<AuthState>>>,
+    add_wasm: Vec<u8>,
+    mul_wasm: Vec<u8>,
 ) {
     thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -1175,31 +1203,78 @@ fn spawn_stdin_reader(
                     }
                 }
             }
-            // Dispatch on shape. Pipeline-shape submissions pass
-            // the auth gate (which already burned the rate-limit
-            // token + recorded the replay nonce) but the executor
-            // wiring is pending #106 PR 3 of N, so we log and
-            // drop here rather than queueing for the run loop.
-            let legacy = match sub {
-                JobSubmission::Legacy(l) => l,
-                JobSubmission::Pipeline(p) => {
+            // Resolve the wire shape into a queue-ready
+            // `RunSubmission` (#106 PR 3 of N). Legacy lines build a
+            // single-step ExecWasm pipeline from the canned modules;
+            // pipeline lines decode `pipeline_cbor_hex` into a
+            // `cosaci_jobs::Pipeline`. Decode failures are dropped
+            // with a warn.
+            let run_sub = match sub {
+                JobSubmission::Legacy(l) => {
+                    // Legacy log line — the demo_networked smoke test
+                    // greps `kind=Add a=1 b=2` (and the mul variant) to
+                    // confirm legacy NDJSON round-trips through the
+                    // gate. Emitting it here (vs. in the run loop)
+                    // keeps the assertion stable across the v0.5 lift.
                     tracing::info!(
-                        "[coordinator] pipeline-shape submission accepted by gate; execution pending #106 PR 3 of N (tenant_id={:?} nonce={:?} pipeline_cbor_bytes={})",
-                        p.tenant_id,
-                        p.nonce,
-                        p.pipeline_cbor_hex.len() / 2,
+                        "[coordinator] legacy submission: kind={:?} a={} b={} deadline_secs={}",
+                        l.kind,
+                        l.a,
+                        l.b,
+                        l.deadline_secs
                     );
-                    continue;
+                    let module = match l.kind {
+                        JobKind::Add => &add_wasm,
+                        JobKind::Mul => &mul_wasm,
+                    };
+                    let args = encode_args(l.a, l.b).expect("encode args");
+                    RunSubmission {
+                        pipeline: cosaci_jobs::Pipeline {
+                            steps: vec![cosaci_jobs::Step::ExecWasm {
+                                module: module.clone(),
+                                args_cbor: args,
+                                limits: cosaci_jobs::Limits::default(),
+                            }],
+                        },
+                        deadline_secs: l.deadline_secs,
+                        origin: SubmissionOrigin::Legacy,
+                    }
+                }
+                JobSubmission::Pipeline(p) => {
+                    let Some(cbor) = parse_hex_bytes(&p.pipeline_cbor_hex) else {
+                        tracing::warn!(
+                            "[coordinator] pipeline submission: bad hex in pipeline_cbor_hex (tenant_id={:?} nonce={:?})",
+                            p.tenant_id,
+                            p.nonce
+                        );
+                        continue;
+                    };
+                    let pipeline: cosaci_jobs::Pipeline = match ciborium::from_reader(&cbor[..]) {
+                        Ok(pl) => pl,
+                        Err(e) => {
+                            tracing::warn!(
+                                "[coordinator] pipeline submission: CBOR decode failed: {e} (tenant_id={:?} nonce={:?} bytes={})",
+                                p.tenant_id,
+                                p.nonce,
+                                cbor.len()
+                            );
+                            continue;
+                        }
+                    };
+                    RunSubmission {
+                        pipeline,
+                        deadline_secs: p.deadline_secs,
+                        origin: SubmissionOrigin::Pipeline,
+                    }
                 }
             };
-            match tx.try_send(legacy) {
+            match tx.try_send(run_sub) {
                 Ok(()) => {}
                 Err(TrySendError::Full(dropped)) => {
                     tracing::warn!(
-                        "[coordinator] submission queue full, dropping record (kind={:?} a={} b={}); raise --queue-cap or slow producers",
-                        dropped.kind,
-                        dropped.a,
-                        dropped.b
+                        "[coordinator] submission queue full, dropping record (shape={} step(s)={}); raise --queue-cap or slow producers",
+                        dropped.shape_label(),
+                        dropped.pipeline.steps.len()
                     );
                 }
                 Err(TrySendError::Disconnected(_)) => {
