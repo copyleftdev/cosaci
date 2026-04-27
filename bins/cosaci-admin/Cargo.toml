@@ -13,6 +13,7 @@ publish     = false
 
 [dependencies]
 cosaci-core     = { path = "../../crates/cosaci-core" }
+cosaci-jobs     = { path = "../../crates/cosaci-jobs" }
 cosaci-protocol = { path = "../../crates/cosaci-protocol" }
 cosaci-state    = { path = "../../crates/cosaci-state" }
 rustls          = { workspace = true }

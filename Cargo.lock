@@ -380,6 +380,7 @@ name = "cosaci-admin"
 version = "0.3.0"
 dependencies = [
  "cosaci-core",
+ "cosaci-jobs",
  "cosaci-protocol",
  "cosaci-state",
  "rustls",
