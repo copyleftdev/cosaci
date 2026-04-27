@@ -3,7 +3,7 @@ id: capture-log-determinism
 source: SPEC.md §10.1 / SPEC.md §6.2
 class: A
 status: passing
-test: tests/capture_log.rs
+test: tests/capture_log.rs + crates/cosaci-protocol/tests/attestation_bundle_wire.rs
 depends_on:
   - exec-native-determinism
   - pipeline-determinism
@@ -76,11 +76,49 @@ For any `(ExecNative, CaptureLog)` pair:
   `Pipeline`. (Captures aren't part of the hash chain;
   the canonical attestation hash binds only `steps`.)
 
-## Out of scope (follow-on)
+## Wire extension (#108 PR 2 of N)
 
-- **Wire extension**: `AttestationBundle { attestation,
-  captures }` envelope variant + retrieval API. Lands in a
-  subsequent #108 PR.
+The `Envelope::SubmitAttestation` payload moved from a bare
+`Attestation` to an `AttestationBundle`:
+
+```rust
+pub struct AttestationBundle {
+    pub attestation: Attestation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<CapturedOutput>,
+}
+```
+
+The agent populates `captures` from
+`PipelineResult::captures` (the slot threaded through the
+step loop in PR 1). The coord destructures and logs each
+capture's name + kind + length + sha256 prefix; persistence
++ retrieval API land in PR 3.
+
+**The signature on `attestation` covers only the canonical
+attestation bytes**, not the captures. That's intentional —
+captures are agent-provided evidence whose integrity is
+bound by each record's own `sha256`. A verifier checks
+(1) the attestation signature, then (2) for each capture,
+`Sha256::digest(bytes_inline) == sha256`.
+
+### Wire-level falsifiable claims
+
+- **Round-trip stability** — encode → decode → encode is
+  byte-equal on the second-encode, for both empty-captures
+  and populated bundles.
+- **`captures` skip-if-empty** — a captureless bundle
+  serializes shorter than a populated one with the same
+  `Attestation`. (The CBOR map omits the `captures` key
+  entirely when empty.)
+- **Capture integrity over the wire** —
+  `Sha256::digest(decoded.bytes_inline) == decoded.sha256`
+  after round-trip. Tampering with `bytes_inline` between
+  encode and decode is detectable by re-hashing.
+
+Falsifications: `crates/cosaci-protocol/tests/attestation_bundle_wire.rs` (4 tests, all pointwise).
+
+## Out of scope (follow-on)
 - **Per-step `max_log_bytes` operator override**: today
   the cap is the hard-coded `MAX_CAPTURE_BYTES` (16 MiB).
   An operator-tunable knob on `Limits` lands later.

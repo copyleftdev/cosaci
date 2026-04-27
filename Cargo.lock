@@ -470,6 +470,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde-big-array",
+ "sha2 0.11.0",
  "tempfile",
  "time",
  "tokio",

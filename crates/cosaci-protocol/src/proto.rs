@@ -17,6 +17,53 @@ use serde_big_array::BigArray;
 use cosaci_core::attestation::Attestation;
 use cosaci_core::capabilities::{Capabilities, JobRequirements};
 use cosaci_core::retrieval::JobBundle;
+use cosaci_jobs::CapturedOutput;
+
+/// Wire-level attestation envelope (#108 PR 2 of N). Carries
+/// a signed [`Attestation`] alongside any per-step
+/// [`CapturedOutput`] records emitted by the pipeline's
+/// `Step::CaptureLog` / `Step::CaptureArtifact` steps.
+///
+/// The signature on `attestation` covers only the canonical
+/// attestation bytes, **not** the captures — captures are
+/// agent-provided evidence whose integrity is bound by each
+/// record's own `sha256`. A verifier checks: (1) the
+/// attestation signature, then (2) for each capture,
+/// `Sha256::digest(bytes_inline) == sha256`. Captures with
+/// no `bytes_inline` (size > inline cap, retrieved out-of-
+/// band) are verified against the cap'd bytes returned by
+/// the retrieval API. Out-of-band retrieval is itself a
+/// follow-on PR.
+///
+/// Backward-compat: `captures` is `#[serde(default,
+/// skip_serializing_if = "Vec::is_empty")]`, so a producer
+/// that emits no captures yields the same wire bytes as a
+/// pre-#108 `Attestation` payload (well: same plus the
+/// outer struct overhead, which is zero in CBOR for a
+/// single-field map under canonical encoding).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttestationBundle {
+    /// The signed attestation. Canonical bytes + signature
+    /// are exactly what `Attestation::sign_with` produced.
+    pub attestation: Attestation,
+    /// Per-step captures emitted during `execute_pipeline`.
+    /// Empty for pipelines without `Step::CaptureLog` or
+    /// `Step::CaptureArtifact`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<CapturedOutput>,
+}
+
+impl AttestationBundle {
+    /// Convenience: bundle a captureless attestation (the
+    /// pre-#108 producer shape).
+    #[must_use]
+    pub fn from_attestation(attestation: Attestation) -> Self {
+        Self {
+            attestation,
+            captures: Vec::new(),
+        }
+    }
+}
 
 /// Fixed VRF challenge for the registration proof. Binds
 /// `(vrf_pubkey, this string)` to a unique output that only the
@@ -69,8 +116,12 @@ pub enum Envelope {
         #[serde(with = "BigArray")]
         vrf_proof: [u8; 64],
     },
-    /// Agent returns a signed attestation for an assigned job.
-    SubmitAttestation(Attestation),
+    /// Agent returns a signed attestation (with any per-step
+    /// captures) for an assigned job. Wire-level wrapper is
+    /// [`AttestationBundle`]; the contained `attestation` is
+    /// what gets verified + Merkle-anchored, and `captures`
+    /// is operator-readable evidence (#108).
+    SubmitAttestation(AttestationBundle),
 
     // ── Coordinator → Agent ────────────────────────────────────────────
     /// Coordinator acknowledges a `Register`.
