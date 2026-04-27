@@ -28,11 +28,12 @@
 //!   `git`; falls back to `StepStatus::Failed` if `git` isn't on
 //!   `PATH`). Tree hashing is the deterministic core under
 //!   `hypotheses/source-fetch-determinism.md`.
-//! - [`Step::ExecNative`] — plain executor implemented (issue #107
-//!   PR 1 of N). Walltime enforcement + bounded captures + spawn-
-//!   failure determinism. **No sandbox yet**: cgroups v2 cpu/memory
-//!   land in #107 PR 2, mount-namespace + read-only rootfs in PR 3,
-//!   egress enforcement in PR 4. See
+//! - [`Step::ExecNative`] — executor implemented through #107 PR 3
+//!   of N: plain spawn + walltime + bounded captures (PR 1),
+//!   cgroup-v2 `memory.max` + OOM-kill detection (PR 2), polled
+//!   `cpu.stat::usage_usec` enforcement of `cpu_seconds` (PR 3).
+//!   **Remaining sandbox layers**: mount-namespace + read-only
+//!   rootfs (PR 4), egress enforcement (PR 5). See
 //!   `hypotheses/exec-native-determinism.md`.
 //! - [`Step::CaptureLog`] / [`Step::CaptureArtifact`] — types defined;
 //!   executors land alongside `ExecNative`.
@@ -102,9 +103,9 @@ pub enum Step {
         limits: Limits,
     },
     /// Execute a native command with a fixed argv + environment.
-    /// Plain executor: issue #107 PR 1 of N. Sandbox layers
-    /// (cgroups v2, mount namespace, egress enforcement) land in
-    /// subsequent #107 PRs.
+    /// Plain executor: #107 PR 1; cgroups v2 memory: PR 2;
+    /// cgroups v2 cpu (polled): PR 3. Mount-namespace + egress:
+    /// PRs 4-5.
     ExecNative {
         /// Command + arguments. `command[0]` is the executable.
         command: Vec<String>,
@@ -514,16 +515,18 @@ fn execute_native_step(
         }
     };
 
-    // cgroup-v2 memory enforcement (#107 PR 2 of N). Attach the
-    // child to a per-step sub-cgroup with `memory.max` set; if
-    // setup fails (no cgroup-v2, no user delegation, no memory
-    // controller in subtree), `try_create` returns `None` and the
-    // step runs with no memory enforcement (matches PR-1 semantics).
-    let cgroup = StepCgroup::try_create(step_index, limits.memory_mb);
+    // cgroup-v2 enforcement (#107 PR 2/3 of N). Attach the child
+    // to a per-step sub-cgroup with `memory.max` set (PR 2) and
+    // observe `cpu.stat::usage_usec` for cpu_seconds enforcement
+    // (PR 3). Setup failures (no cgroup-v2, no user delegation,
+    // no memory/cpu controllers in subtree) make `try_create`
+    // return `None` and the step runs without those layers
+    // (matches PR-1 semantics).
+    let cgroup = StepCgroup::try_create(step_index, limits.memory_mb, limits.cpu_seconds);
     if let Some(cg) = cgroup.as_ref() {
         if let Err(e) = cg.attach(child.id()) {
             tracing_workaround_warn(&format!(
-                "native step {step_index}: cgroup attach failed: {e}; step continues without memory enforcement"
+                "native step {step_index}: cgroup attach failed: {e}; step continues without cgroup enforcement"
             ));
         }
     }
@@ -533,22 +536,24 @@ fn execute_native_step(
     let stdout_thread = thread::spawn(move || read_capped(stdout_pipe, MAX_CAPTURE_BYTES));
     let stderr_thread = thread::spawn(move || read_capped(stderr_pipe, MAX_CAPTURE_BYTES));
 
-    let exit_status = if limits.wall_seconds == 0 {
-        child.wait().ok()
-    } else {
-        wait_with_wall_timeout(
-            &mut child,
-            Duration::from_secs(u64::from(limits.wall_seconds)),
-        )
-    };
+    // Multi-limit wait. Wall-time uses the elapsed `Instant` from
+    // call entry; cpu_seconds uses the cgroup's `cpu.stat::
+    // usage_usec` (only if a cgroup with the cpu controller was
+    // successfully created — same graceful-fallback story as
+    // memory).
+    let wall_limit =
+        (limits.wall_seconds > 0).then(|| Duration::from_secs(u64::from(limits.wall_seconds)));
+    let cpu_limit =
+        (limits.cpu_seconds > 0).then(|| Duration::from_secs(u64::from(limits.cpu_seconds)));
+    let outcome = wait_with_limits(&mut child, wall_limit, cpu_limit, cgroup.as_ref());
 
     // Read OOM state BEFORE the cgroup is dropped (StepCgroup's
     // Drop calls rmdir, which clears memory.events.local). Cheap
     // file read; safe to do whether or not setup succeeded.
     let oom_killed = cgroup.as_ref().is_some_and(StepCgroup::was_oom_killed);
 
-    match exit_status {
-        Some(status) => {
+    match outcome {
+        ExitOutcome::Exited(status) => {
             // Clean exit — wait for reader threads to drain. Since
             // the child's pipes close on exit, both reads EOF
             // promptly.
@@ -600,44 +605,62 @@ fn execute_native_step(
                 }
             }
         }
-        None => {
-            // Walltime exceeded; child was killed. We do NOT
+        ExitOutcome::KilledByWall | ExitOutcome::KilledByCpu => {
+            // Limit exceeded; child was killed by us. We do NOT
             // `join` the reader threads here. Rationale: if the
             // killed child had spawned its own children (e.g.
             // `sh -c 'sleep 5'` reparents `sleep` to init), those
             // children inherit our stdout/stderr pipes and the
             // pipe-read won't EOF until they exit. Joining would
-            // block past `wall_seconds`. The output_hash for the
-            // `LimitExceeded { Wall }` case binds only
-            // (step, LimitKind::Wall) — captured bytes are
-            // intentionally not part of the hash, so dropping
-            // them here keeps determinism intact. The detached
-            // reader threads finish when the reparented children
-            // close their pipe ends, after which they exit
-            // cleanly. PR 4 (cgroups + namespaces) replaces this
-            // with a cgroup-kill of the whole process tree.
+            // block past the limit. The output_hash for these
+            // cases binds only (step, LimitKind) — captured
+            // bytes are intentionally not part of the hash, so
+            // dropping them here keeps determinism intact. The
+            // detached reader threads finish when the reparented
+            // children close their pipe ends, after which they
+            // exit cleanly. PR 4 (cgroups + namespaces) replaces
+            // this with a cgroup-kill of the whole process tree.
             drop(stdout_thread);
             drop(stderr_thread);
+            let which = match outcome {
+                ExitOutcome::KilledByWall => LimitKind::Wall,
+                ExitOutcome::KilledByCpu => LimitKind::Cpu,
+                ExitOutcome::Exited(_) => unreachable!(),
+            };
             StepOutput {
                 step_index,
-                status: StepStatus::LimitExceeded {
-                    which: LimitKind::Wall,
-                },
-                output_hash: hash_canonical(&(step, LimitKind::Wall)),
+                status: StepStatus::LimitExceeded { which },
+                output_hash: hash_canonical(&(step, which)),
             }
         }
     }
 }
 
-/// Per-step cgroup-v2 sandbox (#107 PR 2 of N — memory only).
+/// Outcome of waiting on the child with optional walltime +
+/// cpu-time limits. Distinguishes a clean exit from a kill we
+/// initiated (so the caller can attribute the right
+/// `LimitKind`).
+enum ExitOutcome {
+    Exited(std::process::ExitStatus),
+    KilledByWall,
+    KilledByCpu,
+}
+
+/// Per-step cgroup-v2 sandbox (#107 PR 2/3 of N — memory hard
+/// cap + cpu-time observation).
 ///
 /// On Linux with cgroup-v2 + user delegation:
 ///
 /// 1. Resolve the calling process's cgroup from `/proc/self/cgroup`.
 /// 2. Create a unique sub-cgroup under it.
-/// 3. Write `memory.max` = `memory_mb << 20` bytes.
+/// 3. Write `memory.max` = `memory_mb << 20` bytes (PR 2).
 /// 4. Caller attaches the child via [`Self::attach`].
-/// 5. After the child exits, [`Self::was_oom_killed`] reads
+/// 5. While the child runs, the caller may poll
+///    [`Self::cpu_usage_usec`] to enforce `cpu_seconds`
+///    (PR 3 — cgroup `cpu.max` is a rate limiter, not a
+///    cumulative-time killer, so total-time enforcement
+///    requires polling).
+/// 6. After the child exits, [`Self::was_oom_killed`] reads
 ///    `memory.events.local` to detect kernel OOM-kill.
 /// 6. `Drop` rmdirs the sub-cgroup (best-effort).
 ///
@@ -657,21 +680,31 @@ struct StepCgroup {
 }
 
 impl StepCgroup {
-    /// Try to create a per-step cgroup. Returns `None` if
-    /// `memory_mb == 0` (no enforcement requested) or if any
-    /// part of the cgroup setup fails.
+    /// Try to create a per-step cgroup. Returns `None` if no
+    /// limits are requested (`memory_mb == 0 && cpu_seconds == 0`)
+    /// or if any part of the cgroup setup fails. Each requested
+    /// limit independently requires its controller in
+    /// `cgroup.subtree_control`: memory needs `memory`, cpu
+    /// needs `cpu`. Partial setup (e.g. memory delegated but cpu
+    /// not, with cpu_seconds > 0) returns `None` for the whole
+    /// step rather than silently honoring only one limit.
     #[cfg(target_os = "linux")]
-    fn try_create(step_index: u32, memory_mb: u32) -> Option<Self> {
-        if memory_mb == 0 {
+    fn try_create(step_index: u32, memory_mb: u32, cpu_seconds: u32) -> Option<Self> {
+        if memory_mb == 0 && cpu_seconds == 0 {
             return None;
         }
         let parent = current_cgroup_path()?;
 
-        // Verify the memory controller is delegated. Without
-        // it, writing memory.max silently no-ops.
-        if !subtree_has_controller(&parent, "memory") {
+        if memory_mb > 0 && !subtree_has_controller(&parent, "memory") {
             tracing_workaround_warn(&format!(
                 "cgroup at {} doesn't delegate the memory controller; step {step_index} runs without memory enforcement",
+                parent.display()
+            ));
+            return None;
+        }
+        if cpu_seconds > 0 && !subtree_has_controller(&parent, "cpu") {
+            tracing_workaround_warn(&format!(
+                "cgroup at {} doesn't delegate the cpu controller; step {step_index} runs without cpu enforcement",
                 parent.display()
             ));
             return None;
@@ -689,25 +722,35 @@ impl StepCgroup {
 
         if let Err(e) = std::fs::create_dir(&path) {
             tracing_workaround_warn(&format!(
-                "cgroup mkdir at {} failed: {e}; step {step_index} runs without memory enforcement",
+                "cgroup mkdir at {} failed: {e}; step {step_index} runs without cgroup enforcement",
                 path.display()
             ));
             return None;
         }
 
-        let mem_max = u64::from(memory_mb).saturating_mul(1024 * 1024);
-        if let Err(e) = std::fs::write(path.join("memory.max"), mem_max.to_string()) {
-            tracing_workaround_warn(&format!("cgroup memory.max write failed: {e}; cleaning up"));
-            let _ = std::fs::remove_dir(&path);
-            return None;
+        if memory_mb > 0 {
+            let mem_max = u64::from(memory_mb).saturating_mul(1024 * 1024);
+            if let Err(e) = std::fs::write(path.join("memory.max"), mem_max.to_string()) {
+                tracing_workaround_warn(&format!(
+                    "cgroup memory.max write failed: {e}; cleaning up"
+                ));
+                let _ = std::fs::remove_dir(&path);
+                return None;
+            }
         }
+        // cpu_seconds enforcement is observation-only at the
+        // cgroup layer (see `cpu_usage_usec` + the executor's
+        // wait_with_limits poll loop). Total-CPU-time is not
+        // a kernel-enforced cgroup primitive — `cpu.max` is a
+        // bandwidth (rate) limiter, not a cumulative-time
+        // killer.
 
         Some(Self { path })
     }
 
     #[cfg(not(target_os = "linux"))]
     #[allow(dead_code)]
-    fn try_create(_step_index: u32, _memory_mb: u32) -> Option<Self> {
+    fn try_create(_step_index: u32, _memory_mb: u32, _cpu_seconds: u32) -> Option<Self> {
         None
     }
 
@@ -739,6 +782,25 @@ impl StepCgroup {
     #[cfg(not(target_os = "linux"))]
     fn was_oom_killed(&self) -> bool {
         false
+    }
+
+    /// Cumulative CPU time used by all tasks in this cgroup,
+    /// in microseconds. Reads `cpu.stat`'s `usage_usec` line —
+    /// cgroup-v2's standard cpu accounting interface, present
+    /// whenever the cpu controller is delegated. Returns
+    /// `None` on any read or parse failure (including the
+    /// stub on non-Linux).
+    #[cfg(target_os = "linux")]
+    fn cpu_usage_usec(&self) -> Option<u64> {
+        let text = std::fs::read_to_string(self.path.join("cpu.stat")).ok()?;
+        text.lines()
+            .find_map(|line| line.strip_prefix("usage_usec "))
+            .and_then(|rest| rest.trim().parse::<u64>().ok())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn cpu_usage_usec(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -806,27 +868,54 @@ fn read_capped<R: Read>(mut pipe: R, cap: usize) -> Vec<u8> {
     out
 }
 
-/// Wait for `child` up to `timeout`. Returns
-/// `Some(ExitStatus)` if the child finished in time, `None`
-/// if the child was killed for exceeding the deadline.
-fn wait_with_wall_timeout(
+/// Wait for `child` with optional walltime + cpu-time limits.
+///
+/// On every poll iteration:
+/// - `try_wait` checks for clean exit;
+/// - `start.elapsed()` is compared against `wall_limit`;
+/// - if `cpu_limit` and `cgroup` are both `Some`, the cgroup's
+///   `cpu.stat::usage_usec` is read and compared.
+///
+/// First limit hit wins: child is `kill()`-ed + reaped, and the
+/// matching [`ExitOutcome::KilledByWall`] / `KilledByCpu` is
+/// returned. Both limits absent (or missing cgroup for cpu)
+/// degrade to a plain blocking wait.
+fn wait_with_limits(
     child: &mut std::process::Child,
-    timeout: Duration,
-) -> Option<std::process::ExitStatus> {
+    wall_limit: Option<Duration>,
+    cpu_limit: Option<Duration>,
+    cgroup: Option<&StepCgroup>,
+) -> ExitOutcome {
+    // Fast path: no limits, no cgroup → plain blocking wait
+    // (no polling overhead).
+    if wall_limit.is_none() && cpu_limit.is_none() {
+        return match child.wait() {
+            Ok(status) => ExitOutcome::Exited(status),
+            Err(_) => ExitOutcome::KilledByWall, // unreachable in practice
+        };
+    }
     let start = Instant::now();
+    let cpu_limit_usec = cpu_limit.map(|d| d.as_micros() as u64);
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
+            Ok(Some(status)) => return ExitOutcome::Exited(status),
             Ok(None) => {}
-            Err(_) => return None,
+            Err(_) => return ExitOutcome::KilledByWall,
         }
-        if start.elapsed() >= timeout {
-            // Best-effort kill + reap. If kill fails (race —
-            // child already exited), one more `try_wait` picks
-            // up the status next iteration of the caller.
+        if let Some(w) = wall_limit
+            && start.elapsed() >= w
+        {
             let _ = child.kill();
             let _ = child.wait();
-            return None;
+            return ExitOutcome::KilledByWall;
+        }
+        if let (Some(c), Some(cg)) = (cpu_limit_usec, cgroup)
+            && let Some(usage) = cg.cpu_usage_usec()
+            && usage >= c
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return ExitOutcome::KilledByCpu;
         }
         thread::sleep(WALL_POLL_INTERVAL);
     }
