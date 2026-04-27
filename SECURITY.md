@@ -30,7 +30,19 @@ the audit trail (`hypotheses/index.md` is the SSOT).
   documented `bloom-fp-rate` envelope.
 - **Sandbox escapes.** A WASM module that escapes wasmtime's
   isolation or exceeds its declared `Limits` without producing
-  `LimitExceeded`.
+  `LimitExceeded`. Equivalent for `Step::ExecNative`: a native
+  child that exceeds `Limits.memory_mb` without the cgroup-v2
+  OOM killer firing + `memory.events.local` recording it, or
+  exceeds `cpu_seconds` without the polled `cpu.stat::usage_usec`
+  watchdog killing it.
+- **Capture-integrity bypass.** A capture in an
+  `AttestationBundle` whose `sha256` field disagrees with
+  `bytes_inline` after wire round-trip, OR an on-disk persisted
+  capture whose stored bytes disagree with the recorded hash.
+  Captures are agent-provided evidence whose integrity is bound
+  by per-record SHA-256, not by the attestation's signature —
+  any path that lets a man-in-the-middle modify capture bytes
+  without the auditor detecting it via re-hashing is in scope.
 - **mTLS bypass.** Any path where a client without a valid
   CA-signed cert can register, vote, or read attestations.
 - **Enrollment-gate bypass** (#45). A runner with a valid mTLS
@@ -48,9 +60,19 @@ the audit trail (`hypotheses/index.md` is the SSOT).
   honestly compute different `output_hash` values for. (This is
   what `pipeline-determinism` and `real-runtime-determinism`
   guard.)
-- **Resource-limit cap-bypass** (#43). A WASM module that exceeds
-  its `cpu_seconds`, `memory_mb`, or `wall_seconds` budget without
-  trapping or being recorded as `LimitExceeded`.
+- **Resource-limit cap-bypass** (#43, #107). A WASM module or
+  native `ExecNative` step that exceeds its `cpu_seconds`,
+  `memory_mb`, or `wall_seconds` budget without trapping or
+  being recorded as `LimitExceeded`. **Note:** the v0.5 sandbox
+  intentionally does NOT enforce filesystem isolation or egress
+  policy on `ExecNative` — that's v0.6's mount-namespace + netns
+  work (issue #107 PR 4-5). A native step in v0.5 CAN read the
+  parent's filesystem; pre-v0.6 deployments should treat all
+  tenants as cooperative. Documented in
+  `hypotheses/exec-native-determinism.md` under "What this PR
+  does not enforce." Reports of "ExecNative reads ~/.ssh" against
+  v0.5 are documented limitation, not vulnerability; against v0.6+
+  they're in scope.
 - **Persistent-log corruption-on-restart** (#33). Any path where
   `MerkleLog::<FileStore>::open(path)` accepts a corrupted file
   silently rather than rejecting it with `InvalidData`.
