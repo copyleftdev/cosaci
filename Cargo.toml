@@ -94,7 +94,7 @@ hmac             = "0.13.0"
 merlin           = "3.0.0"
 rcgen            = "0.14.7"
 rs_merkle        = "1.5.0"
-rustls           = { version = "0.23.39", default-features = false, features = ["ring", "std"] }
+rustls           = { version = "0.23.40", default-features = false, features = ["ring", "std"] }
 rustls-pemfile   = "2.2.0"
 schnorrkel       = "0.11.5"
 serde            = { version = "1.0.228", features = ["derive"] }
