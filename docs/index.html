@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- ── Primary SEO ──────────────────────────────────────────────────── -->
+  <title>CosaCI — Distributed Attested CI on Infrastructure You Own</title>
+  <meta name="description" content="Stop renting cloud runners you already own. CosaCI turns your existing servers into a distributed CI mesh that signs every build with cryptographic proof — verifiable without trusting anyone." />
+  <meta name="keywords" content="self-hosted CI, distributed CI, CI attestation, GitHub Actions alternative, open source CI, Rust CI, cryptographic proof, Merkle log, VRF, mTLS, WebAssembly sandbox, continuous integration, self-sovereign CI, cosaci" />
+  <meta name="author" content="copyleftdev" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+  <link rel="canonical" href="https://copyleftdev.github.io/cosaci/" />
+
+  <!-- ── Open Graph ────────────────────────────────────────────────────── -->
+  <meta property="og:type"        content="website" />
+  <meta property="og:site_name"   content="CosaCI" />
+  <meta property="og:locale"      content="en_US" />
+  <meta property="og:url"         content="https://copyleftdev.github.io/cosaci/" />
+  <meta property="og:title"       content="CosaCI — Distributed Attested CI on Infrastructure You Own" />
+  <meta property="og:description" content="Stop renting cloud runners you already own. CosaCI turns your existing servers into a distributed CI mesh that signs every build with cryptographic proof — verifiable without trusting anyone." />
+  <meta property="og:image"       content="https://copyleftdev.github.io/cosaci/og-image.png" />
+  <meta property="og:image:width"  content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt"    content="CosaCI distributed attested CI mesh — pipeline and scale visualization" />
+
+  <!-- ── Twitter / X Card ──────────────────────────────────────────────── -->
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="twitter:site"        content="@copyleftdev" />
+  <meta name="twitter:creator"     content="@copyleftdev" />
+  <meta name="twitter:title"       content="CosaCI — Distributed Attested CI on Infrastructure You Own" />
+  <meta name="twitter:description" content="Stop renting cloud runners you already own. CosaCI turns your existing servers into a distributed CI mesh that signs every build with cryptographic proof." />
+  <meta name="twitter:image"       content="https://copyleftdev.github.io/cosaci/og-image.png" />
+  <meta name="twitter:image:alt"   content="CosaCI — scale visualization showing thousands of sovereign runners" />
+
+  <!-- ── JSON-LD Structured Data ──────────────────────────────────────── -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://copyleftdev.github.io/cosaci/#app",
+        "name": "CosaCI",
+        "alternateName": "cosaci",
+        "description": "Distributed attested CI mesh — replace centralized cloud runners with a committee of machines you control. Every job produces a signed, content-addressed proof anchored in a tamper-evident Merkle log, verifiable without trusting CosaCI.",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "Continuous Integration",
+        "operatingSystem": ["Linux", "macOS"],
+        "url": "https://copyleftdev.github.io/cosaci/",
+        "sameAs": "https://github.com/copyleftdev/cosaci",
+        "codeRepository": "https://github.com/copyleftdev/cosaci",
+        "license": "https://opensource.org/licenses/MIT",
+        "softwareVersion": "0.5.0",
+        "dateModified": "2026-05-05",
+        "programmingLanguage": { "@type": "ComputerLanguage", "name": "Rust" },
+        "keywords": "continuous integration, CI, distributed systems, attestation, Rust, WebAssembly, Merkle tree, VRF, mTLS, self-hosted runners, cryptographic proof",
+        "featureList": [
+          "VRF-based committee selection",
+          "Ed25519 attestation signing",
+          "Wasmtime WASM sandbox",
+          "Tamper-evident Merkle log",
+          "mTLS transport",
+          "cgroup-v2 kernel isolation",
+          "Weighted quorum consensus",
+          "HMAC webhook verification"
+        ],
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": {
+          "@type": "Person",
+          "name": "copyleftdev",
+          "url": "https://github.com/copyleftdev"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://copyleftdev.github.io/cosaci/#site",
+        "url": "https://copyleftdev.github.io/cosaci/",
+        "name": "CosaCI",
+        "description": "Distributed Attested CI on Infrastructure You Own",
+        "publisher": {
+          "@type": "Person",
+          "name": "copyleftdev",
+          "url": "https://github.com/copyleftdev"
+        }
+      }
+    ]
+  }
+  </script>
+
+  <!-- ── Favicon ───────────────────────────────────────────────────────── -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='5' fill='%231e3a8a'/><text x='16' y='23' text-anchor='middle' font-size='19' font-weight='900' font-family='Arial Black,Arial,sans-serif' fill='white'>C</text></svg>" />
+  <meta name="theme-color" content="#1e3a8a" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=Epilogue:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Tokens ──────────────────────────────────────────────────────────── */
+    :root {
+      --bg:         oklch(97.5% 0.006 242);
+      --bg-tint:    oklch(94%   0.010 242);
+      --ink:        oklch(14%   0.022 252);
+      --ink-2:      oklch(40%   0.018 250);
+      --ink-3:      oklch(62%   0.012 246);
+      --blue:       oklch(43%   0.185 255);
+      --blue-lt:    oklch(87%   0.060 255);
+      --amber:      oklch(72%   0.160 57);
+      --amber-dk:   oklch(57%   0.155 47);
+      --green:      oklch(62%   0.165 150);
+      --border:     oklch(88%   0.012 246);
+
+      --dark:       oklch(13.5% 0.022 255);
+      --dark-surf:  oklch(18%   0.028 255);
+      --dark-bdr:   oklch(26%   0.025 255);
+      --dark-muted: oklch(55%   0.018 250);
+      --dark-faint: oklch(35%   0.015 250);
+
+      --sp-4:  4px;  --sp-8:  8px;  --sp-12: 12px;
+      --sp-16: 16px; --sp-24: 24px; --sp-32: 32px;
+      --sp-48: 48px; --sp-64: 64px; --sp-96: 96px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Epilogue', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Nav ─────────────────────────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--sp-12) var(--sp-32);
+      gap: var(--sp-16);
+    }
+
+    .wordmark {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 1.15rem;
+      font-weight: 900;
+      letter-spacing: -.02em;
+      color: var(--blue);
+    }
+
+    .nav-right { display: flex; align-items: center; gap: var(--sp-16); }
+
+    .v-pill {
+      background: var(--bg-tint);
+      border: 1px solid var(--border);
+      color: var(--ink-3);
+      font-size: .7rem;
+      font-weight: 500;
+      padding: .2rem .65rem;
+      border-radius: 3px;
+    }
+
+    .nav-link {
+      font-size: .82rem;
+      font-weight: 600;
+      color: var(--ink-2);
+      text-decoration: none;
+      letter-spacing: .01em;
+    }
+    .nav-link:hover { color: var(--blue); }
+
+    /* ── Hero (two-column) ───────────────────────────────────────────────── */
+    .hero {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: clamp(52px, 8vw, 96px) var(--sp-32) clamp(40px, 6vw, 72px);
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: clamp(32px, 4vw, 64px);
+      align-items: start;
+    }
+
+    .hero-eyebrow {
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: var(--sp-16);
+    }
+
+    h1 {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: clamp(3.2rem, 7vw, 6.5rem);
+      font-weight: 900;
+      line-height: .95;
+      letter-spacing: -.03em;
+      color: var(--ink);
+      max-width: 12ch;
+      margin-bottom: var(--sp-24);
+    }
+
+    .hero-body {
+      font-size: 1.02rem;
+      font-weight: 400;
+      line-height: 1.7;
+      color: var(--ink-2);
+      max-width: 54ch;
+      margin-bottom: var(--sp-32);
+    }
+
+    .hero-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-8);
+    }
+
+    .htag {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--ink-3);
+      font-size: .68rem;
+      font-weight: 600;
+      padding: .3rem .75rem;
+      border-radius: 3px;
+      letter-spacing: .03em;
+    }
+
+    /* Proof receipt */
+    .hero-right {
+      padding-top: clamp(12px, 2vw, 32px);
+    }
+
+    .receipt {
+      background: var(--bg-tint);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: var(--sp-24);
+    }
+
+    .receipt-eyebrow {
+      font-size: .6rem;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: var(--sp-16);
+    }
+
+    .receipt-pre {
+      font-family: ui-monospace, 'Courier New', monospace;
+      font-size: .82rem;
+      line-height: 1.85;
+      color: var(--ink-2);
+      white-space: pre;
+      overflow: hidden;
+    }
+
+    .receipt-pre .key { color: var(--ink-3); }
+    .receipt-pre .val { color: var(--ink); font-weight: 500; }
+    .receipt-pre .ok  { color: var(--green); font-weight: 700; }
+
+    .receipt-note {
+      margin-top: var(--sp-16);
+      font-size: .72rem;
+      font-style: italic;
+      color: var(--ink-3);
+      line-height: 1.5;
+    }
+
+    /* ── Divider ─────────────────────────────────────────────────────────── */
+    .full-rule {
+      height: 1px;
+      background: var(--border);
+      margin: 0 var(--sp-32);
+    }
+
+    /* ── Section heading ─────────────────────────────────────────────────── */
+    .section-head {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: var(--sp-64) var(--sp-32) var(--sp-32);
+    }
+
+    .s-eye {
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: var(--sp-8);
+    }
+
+    .s-h {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: clamp(1.9rem, 3.5vw, 3rem);
+      font-weight: 900;
+      line-height: .97;
+      letter-spacing: -.03em;
+      color: var(--ink);
+      max-width: 22ch;
+    }
+
+    /* ── Pipeline ────────────────────────────────────────────────────────── */
+    .pipe-outer {
+      max-width: 1100px;
+      margin: 0 auto var(--sp-64);
+      padding: 0 var(--sp-32);
+    }
+
+    .pipe-flow {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .pipe-step {
+      padding: var(--sp-24) var(--sp-16) var(--sp-16);
+      border-right: 1px solid var(--border);
+      border-top: 3px solid var(--c, var(--blue));
+      display: flex;
+      flex-direction: column;
+      transition: background .18s ease;
+      cursor: default;
+    }
+    .pipe-step:last-child { border-right: none; }
+    .pipe-step:hover { background: var(--bg); }
+
+    .pipe-ord {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 3.4rem;
+      font-weight: 900;
+      letter-spacing: -.04em;
+      line-height: 1;
+      color: var(--blue-lt);
+      display: block;
+      margin-bottom: var(--sp-8);
+      user-select: none;
+    }
+
+    .pipe-name {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: .88rem;
+      font-weight: 900;
+      letter-spacing: -.01em;
+      line-height: 1.15;
+      color: var(--ink);
+      margin-bottom: var(--sp-8);
+    }
+
+    .pipe-desc {
+      font-size: .67rem;
+      line-height: 1.6;
+      color: var(--ink-2);
+      flex: 1;
+    }
+
+    .pipe-cat {
+      margin-top: var(--sp-12);
+      font-size: .57rem;
+      font-weight: 700;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--c, var(--blue));
+    }
+
+    /* ── Architecture ────────────────────────────────────────────────────── */
+    .arch-outer {
+      max-width: 1100px;
+      margin: 0 auto var(--sp-96);
+      padding: 0 var(--sp-32);
+    }
+
+    .arch-stack {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .arch-row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 0;
+      padding: var(--sp-32);
+      border-top: 1px solid var(--border);
+    }
+    .arch-row:first-child { border-top: none; }
+
+    .layer-id {
+      font-size: .6rem;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      padding-top: 3px;
+    }
+
+    .layer-libs {
+      display: flex;
+      gap: var(--sp-32);
+      flex-wrap: wrap;
+    }
+
+    .lib {
+      flex: 1;
+      min-width: 190px;
+    }
+
+    .lib-name {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 1.02rem;
+      font-weight: 900;
+      letter-spacing: -.02em;
+      color: var(--blue);
+      margin-bottom: 5px;
+      line-height: 1.1;
+    }
+
+    .lib-desc {
+      font-size: .7rem;
+      line-height: 1.6;
+      color: var(--ink-2);
+      max-width: 30ch;
+    }
+
+    /* ── SCALE SECTION ───────────────────────────────────────────────────── */
+    .scale-section {
+      background: var(--dark);
+      padding: clamp(52px, 7vw, 88px) 0 clamp(40px, 5vw, 64px);
+    }
+
+    .scale-head {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 var(--sp-32) var(--sp-32);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: var(--sp-32);
+    }
+
+    .scale-eye {
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin-bottom: var(--sp-12);
+    }
+
+    .scale-h {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: clamp(2.2rem, 4.5vw, 4rem);
+      font-weight: 900;
+      line-height: .96;
+      letter-spacing: -.03em;
+      color: oklch(95% 0.006 240);
+      margin-bottom: var(--sp-16);
+    }
+
+    .scale-sub {
+      font-size: .95rem;
+      line-height: 1.65;
+      color: var(--dark-muted);
+      max-width: 50ch;
+    }
+
+    /* Live stats column */
+    .scale-live {
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .live-row {
+      margin-bottom: var(--sp-16);
+    }
+
+    .live-val {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 2.4rem;
+      font-weight: 900;
+      letter-spacing: -.04em;
+      color: var(--amber);
+      line-height: 1;
+      display: block;
+    }
+
+    .live-lbl {
+      font-size: .62rem;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--dark-muted);
+    }
+
+    /* Canvas area */
+    .canvas-area {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 var(--sp-32);
+      position: relative;
+    }
+
+    #scale-canvas {
+      display: block;
+      width: 100%;
+      border-radius: 6px;
+      background: var(--dark-surf);
+      border: 1px solid var(--dark-bdr);
+    }
+
+    .canvas-overlay {
+      position: absolute;
+      bottom: var(--sp-16);
+      left: calc(var(--sp-32) + var(--sp-16));
+      display: flex;
+      align-items: center;
+      gap: var(--sp-8);
+      pointer-events: none;
+    }
+
+    .phase-pip {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--amber);
+      animation: pip-pulse 1.4s ease-in-out infinite;
+    }
+
+    .phase-label {
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      color: var(--dark-muted);
+    }
+
+    @keyframes pip-pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .25; }
+    }
+
+    /* Stats strip below canvas */
+    .scale-strip {
+      max-width: 1100px;
+      margin: var(--sp-24) auto 0;
+      padding: 0 var(--sp-32);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      border: 1px solid var(--dark-bdr);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .strip-item {
+      flex: 1 1 0;
+      padding: var(--sp-16) var(--sp-24);
+      border-right: 1px solid var(--dark-bdr);
+    }
+    .strip-item:last-child { border-right: none; }
+
+    .strip-val {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 900;
+      letter-spacing: -.03em;
+      color: oklch(92% 0.008 240);
+      line-height: 1;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .strip-lbl {
+      font-size: .62rem;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dark-muted);
+    }
+
+    /* ── Liberation section ──────────────────────────────────────────────── */
+    .liberation {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: clamp(56px, 8vw, 96px) var(--sp-32);
+    }
+
+    .lib-hl {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: clamp(2.4rem, 4.5vw, 4rem);
+      font-weight: 900;
+      line-height: .96;
+      letter-spacing: -.035em;
+      color: var(--ink);
+      max-width: 18ch;
+      margin-bottom: var(--sp-24);
+    }
+
+    .lib-lede {
+      font-size: 1.02rem;
+      line-height: 1.75;
+      color: var(--ink-2);
+      max-width: 60ch;
+      margin-bottom: var(--sp-48);
+    }
+
+    .lib-lede em {
+      font-style: italic;
+      color: var(--ink);
+      font-weight: 500;
+    }
+
+    .lib-divider {
+      height: 1px;
+      background: var(--border);
+      margin-bottom: var(--sp-48);
+    }
+
+    .lib-cols {
+      display: grid;
+      grid-template-columns: 1.1fr 0.95fr 0.95fr;
+      gap: var(--sp-48);
+    }
+
+    .lib-col-hl {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-size: 1.15rem;
+      font-weight: 900;
+      letter-spacing: -.02em;
+      color: var(--ink);
+      margin-bottom: var(--sp-12);
+      line-height: 1.1;
+    }
+
+    .lib-col-body {
+      font-size: .8rem;
+      line-height: 1.75;
+      color: var(--ink-2);
+      max-width: 34ch;
+    }
+
+    .lib-col-body strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: var(--sp-32);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--sp-16);
+      flex-wrap: wrap;
+    }
+
+    footer, footer a { color: var(--ink-3); font-size: .78rem; }
+    footer a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Reveal ──────────────────────────────────────────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity .65s cubic-bezier(.22,1,.36,1),
+                  transform .65s cubic-bezier(.22,1,.36,1);
+    }
+    .reveal.in { opacity: 1; transform: none; }
+
+    /* ── Responsive ──────────────────────────────────────────────────────── */
+    @media (max-width: 760px) {
+      nav { padding: var(--sp-12) var(--sp-16); }
+      .hero {
+        grid-template-columns: 1fr;
+        padding: 40px var(--sp-16) 40px;
+      }
+      .hero-right { padding-top: 0; }
+      .section-head { padding: var(--sp-48) var(--sp-16) var(--sp-24); }
+      .scale-head { grid-template-columns: 1fr; }
+      .scale-live { text-align: left; }
+      .canvas-area { padding: 0 var(--sp-16); }
+      .scale-strip { margin: var(--sp-16) var(--sp-16) 0; padding: 0; }
+      .strip-item { padding: var(--sp-12) var(--sp-16); min-width: calc(50% - 0px); }
+      footer { padding: var(--sp-24) var(--sp-16); }
+
+      /* Liberation */
+      .liberation { padding: 40px var(--sp-16); }
+      .lib-cols { grid-template-columns: 1fr; gap: var(--sp-32); }
+      .lib-col-body { max-width: 100%; }
+
+      /* Pipeline: 2-col on small screens */
+      .pipe-outer { padding: 0 var(--sp-16); }
+      .pipe-flow {
+        grid-template-columns: repeat(2, 1fr);
+        border-radius: 6px;
+      }
+      .pipe-step:nth-child(2n) { border-right: none; }
+      .pipe-step:nth-child(2n+1) { border-right: 1px solid var(--border); }
+      .pipe-step:last-child { border-right: none; }
+      .pipe-ord { font-size: 2.8rem; }
+
+      /* Architecture: collapse grid */
+      .arch-outer { padding: 0 var(--sp-16); }
+      .arch-row { grid-template-columns: 1fr; gap: var(--sp-16); padding: var(--sp-24) var(--sp-16); }
+      .layer-libs { gap: var(--sp-24); }
+      .lib { min-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Nav ───────────────────────────────────────────────────────────── -->
+  <nav>
+    <span class="wordmark">CosaCI</span>
+    <div class="nav-right">
+      <span class="v-pill">v0.5.0</span>
+      <a class="nav-link" href="https://github.com/copyleftdev/cosaci" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </nav>
+
+  <!-- ── Hero ──────────────────────────────────────────────────────────── -->
+  <section class="hero reveal">
+    <div class="hero-left">
+      <div class="hero-eyebrow">Distributed · Attested · Self-Sovereign</div>
+      <h1>CI you can prove ran honestly.</h1>
+      <p class="hero-body">
+        Replace centralized cloud runners with a committee of machines you control.
+        Every job produces a signed, content-addressed proof — anchored in a tamper-evident
+        Merkle log and independently verifiable without trusting CosaCI.
+      </p>
+      <div class="hero-tags">
+        <span class="htag">Rust</span>
+        <span class="htag">WebAssembly</span>
+        <span class="htag">mTLS / Ed25519</span>
+        <span class="htag">VRF Committee</span>
+        <span class="htag">Merkle Log</span>
+        <span class="htag">Quorum Consensus</span>
+        <span class="htag">Property-Tested</span>
+        <span class="htag">cgroup-v2 isolation</span>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="receipt">
+        <div class="receipt-eyebrow">Example Proof Receipt</div>
+        <pre class="receipt-pre"><span class="key">cosaci-proof/v1
+─────────────────────────────────────
+commit  </span><span class="val">: a3f8d1b2e9c4f7a0b5d8e2c3</span>
+<span class="key">artifact</span><span class="val">: sha256:2f7d8a1b4e9c3f0a7b5d…</span>
+<span class="key">attested</span><span class="val">: 7 runners (Ed25519)</span>
+<span class="key">log-pos </span><span class="val">: 14,729</span>
+<span class="key">quorum  </span><span class="val">: 7 / 7  </span><span class="ok">✓ verified</span>
+<span class="key">─────────────────────────────────────
+verifiable without trusting CosaCI</span></pre>
+        <p class="receipt-note">
+          Signed, content-addressed output for every job.<br>
+          Anchor proof independently against the public Merkle log.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="full-rule"></div>
+
+  <!-- ── Liberation / Cost ─────────────────────────────────────────────── -->
+  <section class="liberation reveal">
+
+    <div class="s-eye">Why CosaCI</div>
+    <div class="lib-hl">Your CI bill is renting compute you already own.</div>
+
+    <p class="lib-lede">
+      For years the industry accepted a strange bargain: pay a cloud provider by the minute
+      to run code on machines you don't own, and receive a green checkmark you can't
+      independently verify. That made sense when everyone was starting from scratch.
+      <em>Most teams aren't anymore.</em>
+      You have servers. Build machines sitting at 30% utilisation while the CI invoice climbs.
+      CosaCI closes that gap — connect the infrastructure you already control, run jobs on it,
+      and receive a cryptographic proof instead of a checkmark.
+    </p>
+
+    <div class="lib-divider"></div>
+
+    <div class="lib-cols">
+
+      <div class="lib-col">
+        <div class="lib-col-hl">$0 runner cost after setup</div>
+        <p class="lib-col-body">
+          Your hardware is bought and paid for. No per-minute billing, no monthly seats,
+          no egress fees. <strong>The marginal cost of a CosaCI build is the electricity
+          on a machine you were already running.</strong>
+          Add capacity by connecting more machines you own — remove them when you need them back.
+        </p>
+      </div>
+
+      <div class="lib-col">
+        <div class="lib-col-hl">No vendor in the critical path</div>
+        <p class="lib-col-body">
+          Every runner is infrastructure you control. No quota requests, no support tickets,
+          no outage pages from a cloud provider you don't own.
+          <strong>Your pipeline runs when your machines run,</strong>
+          on a network you administer, with keys you hold.
+        </p>
+      </div>
+
+      <div class="lib-col">
+        <div class="lib-col-hl">A proof, not a checkmark</div>
+        <p class="lib-col-body">
+          Cloud CI returns pass/fail. CosaCI returns a signed,
+          content-addressed artifact anchored in a Merkle log.
+          <strong>You can verify the result without trusting CosaCI,
+          without trusting the runners, without trusting anyone.</strong>
+          The math is the guarantee.
+        </p>
+      </div>
+
+    </div>
+
+  </section>
+
+  <div class="full-rule"></div>
+
+  <!-- ── Scale Section ─────────────────────────────────────────────────── -->
+  <section class="scale-section">
+
+    <div class="scale-head reveal">
+      <div>
+        <div class="scale-eye">Horizontal Scale</div>
+        <div class="scale-h">One coordinator.<br>Ten thousand<br>sovereign runners.</div>
+        <p class="scale-sub">
+          Every runner is a machine you own. Add capacity by registering more.
+          Schnorrkel VRF ensures unpredictable, fair committee selection at any pool size —
+          no trusted scheduler, no central bottleneck.
+        </p>
+      </div>
+      <div class="scale-live">
+        <div class="live-row">
+          <span class="live-val" id="runner-count">0</span>
+          <span class="live-lbl">Connected Runners</span>
+        </div>
+        <div class="live-row">
+          <span class="live-val" id="round-count">#0</span>
+          <span class="live-lbl">VRF Round</span>
+        </div>
+        <div class="live-row">
+          <span class="live-val">7</span>
+          <span class="live-lbl">Committee Size</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="canvas-area reveal">
+      <canvas id="scale-canvas" height="500"></canvas>
+      <div class="canvas-overlay">
+        <div class="phase-pip"></div>
+        <span class="phase-label" id="phase-label">Runners connected — awaiting job</span>
+      </div>
+    </div>
+
+    <div class="scale-strip reveal">
+      <div class="strip-item">
+        <span class="strip-val">~50</span>
+        <span class="strip-lbl">Jobs / second</span>
+      </div>
+      <div class="strip-item">
+        <span class="strip-val">sr25519</span>
+        <span class="strip-lbl">VRF Scheme</span>
+      </div>
+      <div class="strip-item">
+        <span class="strip-val">Ed25519</span>
+        <span class="strip-lbl">Attestation Key</span>
+      </div>
+      <div class="strip-item">
+        <span class="strip-val">O(log n)</span>
+        <span class="strip-lbl">Merkle Proof</span>
+      </div>
+      <div class="strip-item">
+        <span class="strip-val">mTLS</span>
+        <span class="strip-lbl">Transport</span>
+      </div>
+      <div class="strip-item">
+        <span class="strip-val">cgroup-v2</span>
+        <span class="strip-lbl">Kernel Isolation</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Pipeline ─────────────────────────────────────────────────────── -->
+  <div class="section-head reveal">
+    <div class="s-eye">Job Execution Pipeline</div>
+    <div class="s-h">From webhook trigger<br>to tamper-proof proof.</div>
+  </div>
+  <div class="pipe-outer reveal">
+    <div class="pipe-flow">
+
+      <div class="pipe-step" style="--c: oklch(43% 0.185 255)">
+        <span class="pipe-ord">01</span>
+        <span class="pipe-name">Broadcast</span>
+        <p class="pipe-desc">Job seed fans out to every registered runner over the mTLS mesh</p>
+        <span class="pipe-cat">Network</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(43% 0.175 268)">
+        <span class="pipe-ord">02</span>
+        <span class="pipe-name">VRF Selection</span>
+        <p class="pipe-desc">Top-K Schnorrkel sr25519 proofs elect a fresh, unpredictable committee</p>
+        <span class="pipe-cat">Cryptography</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(48% 0.150 190)">
+        <span class="pipe-ord">03</span>
+        <span class="pipe-name">WASM Sandbox</span>
+        <p class="pipe-desc">Wasmtime executes deterministically under fuel, memory, and epoch limits</p>
+        <span class="pipe-cat">Execution</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(43% 0.165 280)">
+        <span class="pipe-ord">04</span>
+        <span class="pipe-name">Attestation</span>
+        <p class="pipe-desc">Each member signs a canonical CBOR envelope with Ed25519 — stdout, stderr, artifact digests</p>
+        <span class="pipe-cat">Signing</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(47% 0.155 305)">
+        <span class="pipe-ord">05</span>
+        <span class="pipe-name">Quorum</span>
+        <p class="pipe-desc">Weighted matching achieves consensus; dishonest runners lose reputation</p>
+        <span class="pipe-cat">Consensus</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(40% 0.070 255)">
+        <span class="pipe-ord">06</span>
+        <span class="pipe-name">Merkle Anchor</span>
+        <p class="pipe-desc">Consensus artifact appended to a tamper-evident log — O(log n) inclusion proof</p>
+        <span class="pipe-cat">Storage</span>
+      </div>
+
+      <div class="pipe-step" style="--c: oklch(57% 0.155 47)">
+        <span class="pipe-ord">07</span>
+        <span class="pipe-name">Signed Proof</span>
+        <p class="pipe-desc">Commit X → Artifact Y, attested by named public keys at log position N</p>
+        <span class="pipe-cat">Output</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Architecture ───────────────────────────────────────────────────── -->
+  <div class="section-head reveal">
+    <div class="s-eye">Architecture</div>
+    <div class="s-h">Seven focused libraries,<br>one verifiable mesh.</div>
+  </div>
+  <div class="arch-outer reveal">
+    <div class="arch-stack">
+
+      <!-- Interface layer -->
+      <div class="arch-row">
+        <div class="layer-id">Interface</div>
+        <div class="layer-libs">
+          <div class="lib">
+            <div class="lib-name">cosaci-webhook</div>
+            <p class="lib-desc">GitHub and GitLab webhook ingestion with HMAC-SHA256 verification and event normalisation</p>
+          </div>
+          <div class="lib">
+            <div class="lib-name">cosaci-jobs</div>
+            <p class="lib-desc">Typed pipeline DSL: source fetch, WASM execution, native processes, artifact capture per step</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Execution layer -->
+      <div class="arch-row">
+        <div class="layer-id">Execution</div>
+        <div class="layer-libs">
+          <div class="lib">
+            <div class="lib-name">cosaci-protocol</div>
+            <p class="lib-desc">CBOR wire envelopes over mTLS transport — rustls, rcgen certificate generation, CRL support</p>
+          </div>
+          <div class="lib">
+            <div class="lib-name">cosaci-vrf</div>
+            <p class="lib-desc">Schnorrkel sr25519 Verifiable Random Function — fair, bias-resistant committee election at any scale</p>
+          </div>
+          <div class="lib">
+            <div class="lib-name">cosaci-wasm</div>
+            <p class="lib-desc">Wasmtime sandbox with fuel metering, linear-memory limits, epoch interruption, cgroup-v2 isolation</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Foundation layer -->
+      <div class="arch-row">
+        <div class="layer-id">Foundation</div>
+        <div class="layer-libs">
+          <div class="lib">
+            <div class="lib-name">cosaci-core</div>
+            <p class="lib-desc">Pure algebra — signing, attestation canonicalisation, Merkle logs, quorum aggregation, gossip CRDTs</p>
+          </div>
+          <div class="lib">
+            <div class="lib-name">cosaci-state</div>
+            <p class="lib-desc">Tenant registry, distributed leases, partitioned cluster maps, rate limiting</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Footer ────────────────────────────────────────────────────────── -->
+  <footer>
+    <span>
+      <a href="https://github.com/copyleftdev/cosaci" target="_blank" rel="noopener">github.com/copyleftdev/cosaci</a>
+      &nbsp;— distributed attested CI, v0.5.0
+    </span>
+    <span>github.com/copyleftdev/cosaci</span>
+  </footer>
+
+  <script>
+  /* ── Scroll-reveal ────────────────────────────────────────────────────── */
+  const ro = new IntersectionObserver(es => es.forEach(e => {
+    if (e.isIntersecting) { e.target.classList.add('in'); ro.unobserve(e.target); }
+  }), { threshold: 0.07 });
+  document.querySelectorAll('.reveal').forEach(el => ro.observe(el));
+
+  /* ── Canvas: Scale Visualization ─────────────────────────────────────── */
+  (function () {
+    const canvas  = document.getElementById('scale-canvas');
+    const ctx     = canvas.getContext('2d');
+    const RUNNERS = 720;
+    const COORDS  = 3;
+    const CMMT    = 7;
+
+    /* rgba helper */
+    const rgb = (r, g, b, a) => `rgba(${r},${g},${b},${a})`;
+
+    /* Org clusters — cx/cy as fraction of W/H */
+    const CLUSTERS = [
+      { cx: 0.15, cy: 0.20, label: 'Org A', n: 180 },
+      { cx: 0.84, cy: 0.18, label: 'Org B', n: 160 },
+      { cx: 0.12, cy: 0.80, label: 'Org C', n: 190 },
+      { cx: 0.85, cy: 0.82, label: 'Org D', n: 170 },
+    ];
+
+    let W = 0, H = 0;
+    let workers = [], coords = [], committee = [];
+    let phase = 'idle', phaseTimer = 180;
+    let roundNum = 0, frame = 0;
+    let waveR = 0, waveOn = false;
+    let coordPulse = 0;
+    let inited = false;
+
+    /* Phase definitions */
+    const PHASES = {
+      idle:      { dur: 180, label: 'Runners connected — awaiting job',         next: 'broadcast' },
+      broadcast: { dur:  55, label: 'Coordinator broadcasting job seed…',        next: 'vrf'  },
+      vrf:       { dur:  80, label: 'VRF proofs computed — committee elected',   next: 'exec' },
+      exec:      { dur:  90, label: 'Committee executing in WASM sandboxes…',    next: 'attest' },
+      attest:    { dur:  65, label: 'Attestations signed — quorum reached',      next: 'anchor' },
+      anchor:    { dur:  55, label: 'Consensus anchored to Merkle log',          next: 'idle'  },
+    };
+
+    function resize() {
+      W = canvas.parentElement.clientWidth;
+      H = 500;
+      canvas.width  = W;
+      canvas.height = H;
+      if (!inited) { init(); inited = true; }
+    }
+
+    function makeWorker(x, y) {
+      return {
+        x, y,
+        vx: (Math.random() - 0.5) * 0.22,
+        vy: (Math.random() - 0.5) * 0.22,
+        r:  1.6 + Math.random() * 0.8,
+        a:  0.3 + Math.random() * 0.35,
+        ph: Math.random() * Math.PI * 2,
+        state: 'idle',
+      };
+    }
+
+    function init() {
+      workers = []; coords = []; committee = [];
+
+      /* Clustered workers */
+      let placed = 0;
+      CLUSTERS.forEach(cl => {
+        const spread = 0.13;
+        for (let i = 0; i < cl.n; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const r = Math.pow(Math.random(), 0.6) * spread;
+          const x = (cl.cx + Math.cos(a) * r) * W;
+          const y = (cl.cy + Math.sin(a) * r) * H;
+          workers.push(makeWorker(x, y));
+          placed++;
+        }
+      });
+
+      /* Scattered remainder — avoid centre */
+      while (placed < RUNNERS) {
+        const x = (0.08 + Math.random() * 0.84) * W;
+        const y = (0.08 + Math.random() * 0.84) * H;
+        if (Math.hypot(x - W * 0.5, y - H * 0.5) < H * 0.16) continue;
+        workers.push(makeWorker(x, y));
+        placed++;
+      }
+
+      /* Coordinator nodes — small triangle at centre */
+      const cr = Math.min(W, H) * 0.06;
+      for (let i = 0; i < COORDS; i++) {
+        const a = (i / COORDS) * Math.PI * 2 - Math.PI / 2;
+        coords.push({ x: W * 0.5 + Math.cos(a) * cr, y: H * 0.5 + Math.sin(a) * cr, r: 7 });
+      }
+
+      /* Animate runner count up */
+      let shown = 0;
+      const tick = () => {
+        shown = Math.min(shown + 19, RUNNERS);
+        document.getElementById('runner-count').textContent = shown.toLocaleString();
+        if (shown < RUNNERS) setTimeout(tick, 32);
+      };
+      setTimeout(tick, 500);
+    }
+
+    function advance() {
+      const cur = PHASES[phase];
+      phase = cur ? cur.next : 'idle';
+      phaseTimer = PHASES[phase]?.dur ?? 120;
+      document.getElementById('phase-label').textContent = PHASES[phase]?.label ?? '';
+
+      if (phase === 'broadcast') { waveOn = true; waveR = 0; }
+      if (phase === 'vrf') {
+        workers.forEach(w => w.state = 'idle');
+        const pool = [...workers].sort(() => Math.random() - 0.5);
+        committee = pool.slice(0, CMMT);
+        committee.forEach(w => w.state = 'selected');
+        roundNum++;
+        document.getElementById('round-count').textContent = '#' + roundNum.toLocaleString();
+      }
+      if (phase === 'exec')   { committee.forEach(w => w.state = 'exec'); }
+      if (phase === 'attest') { committee.forEach(w => w.state = 'done'); coordPulse = 1; }
+      if (phase === 'idle')   { committee = []; workers.forEach(w => w.state = 'idle'); }
+    }
+
+    function update() {
+      if (--phaseTimer <= 0) advance();
+
+      workers.forEach(w => {
+        w.ph += 0.014;
+        w.x  += w.vx + Math.sin(w.ph)        * 0.07;
+        w.y  += w.vy + Math.cos(w.ph * 0.73) * 0.07;
+
+        /* Soft boundary bounce */
+        const p = 14;
+        if (w.x < p)     w.vx += 0.05;
+        if (w.x > W - p) w.vx -= 0.05;
+        if (w.y < p)     w.vy += 0.05;
+        if (w.y > H - p) w.vy -= 0.05;
+        w.vx *= 0.994; w.vy *= 0.994;
+
+        /* Repel from coordinator zone */
+        const dx = w.x - W * 0.5, dy = w.y - H * 0.5;
+        const dist = Math.hypot(dx, dy), minD = H * 0.15;
+        if (dist < minD && dist > 0) {
+          const f = (minD - dist) / minD * 0.09;
+          w.vx += (dx / dist) * f; w.vy += (dy / dist) * f;
+        }
+      });
+
+      if (waveOn) {
+        waveR += (Math.max(W, H) * 0.65) / 55;
+        if (waveR > Math.max(W, H)) waveOn = false;
+      }
+
+      coordPulse *= 0.91;
+      frame++;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      /* Cluster glow hints */
+      CLUSTERS.forEach(cl => {
+        const g = ctx.createRadialGradient(cl.cx * W, cl.cy * H, 0, cl.cx * W, cl.cy * H, W * 0.18);
+        g.addColorStop(0, 'rgba(90,130,210,0.04)');
+        g.addColorStop(1, 'rgba(90,130,210,0)');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      });
+
+      /* Broadcast wave */
+      if (waveOn) {
+        const cx = W * 0.5, cy = H * 0.5;
+        const g2 = ctx.createRadialGradient(cx, cy, waveR * 0.5, cx, cy, waveR);
+        g2.addColorStop(0,   'rgba(245,165,55,0)');
+        g2.addColorStop(0.6, 'rgba(245,165,55,0.07)');
+        g2.addColorStop(1,   'rgba(245,165,55,0)');
+        ctx.beginPath(); ctx.arc(cx, cy, waveR, 0, Math.PI * 2);
+        ctx.fillStyle = g2; ctx.fill();
+      }
+
+      /* Connections from committee to nearest coordinator */
+      if (phase === 'vrf' || phase === 'exec') {
+        ctx.lineWidth = 0.7;
+        committee.forEach(w => {
+          const c = coords.reduce((a, b) => Math.hypot(w.x-a.x,w.y-a.y) < Math.hypot(w.x-b.x,w.y-b.y) ? a : b);
+          ctx.beginPath(); ctx.moveTo(w.x, w.y); ctx.lineTo(c.x, c.y);
+          ctx.strokeStyle = 'rgba(245,165,55,0.22)'; ctx.stroke();
+        });
+      }
+      if (phase === 'attest' || phase === 'anchor') {
+        ctx.lineWidth = 0.6;
+        committee.forEach(w => {
+          coords.forEach(c => {
+            ctx.beginPath(); ctx.moveTo(w.x, w.y); ctx.lineTo(c.x, c.y);
+            ctx.strokeStyle = 'rgba(100,200,145,0.22)'; ctx.stroke();
+          });
+        });
+      }
+
+      /* Workers */
+      workers.forEach(w => {
+        ctx.beginPath();
+        let r = w.r, fill;
+        if (w.state === 'selected') {
+          r = 3.8;
+          fill = rgb(248, 170, 50, 0.85 + Math.sin(frame * 0.18 + w.ph) * 0.15);
+        } else if (w.state === 'exec') {
+          r = 3.8;
+          fill = rgb(100, 200, 145, 0.75 + Math.sin(frame * 0.22 + w.ph) * 0.25);
+        } else if (w.state === 'done') {
+          r = 3.2; fill = rgb(100, 200, 145, 0.55);
+        } else {
+          fill = rgb(148, 163, 200, w.a + Math.sin(frame * 0.025 + w.ph) * 0.05);
+        }
+        ctx.arc(w.x, w.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = fill; ctx.fill();
+      });
+
+      /* Coordinators */
+      coords.forEach(c => {
+        const haloR = c.r * (4 + coordPulse * 5 + Math.sin(frame * 0.04) * 0.6);
+        const g3 = ctx.createRadialGradient(c.x, c.y, c.r * 0.8, c.x, c.y, haloR);
+        g3.addColorStop(0, 'rgba(245,165,55,0.30)');
+        g3.addColorStop(1, 'rgba(245,165,55,0)');
+        ctx.beginPath(); ctx.arc(c.x, c.y, haloR, 0, Math.PI * 2);
+        ctx.fillStyle = g3; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(245,165,55,0.95)'; ctx.fill();
+      });
+
+      /* Cluster labels */
+      ctx.font = '500 10.5px Epilogue, sans-serif';
+      ctx.fillStyle = 'rgba(148,163,200,0.50)';
+      ctx.textAlign = 'center';
+      CLUSTERS.forEach(cl => {
+        const tx = cl.cx * W;
+        const ty = cl.cy > 0.5 ? cl.cy * H + 28 : cl.cy * H - 16;
+        ctx.fillText(cl.label, tx, ty);
+      });
+
+      /* Coordinator label */
+      ctx.font = '600 9.5px Epilogue, sans-serif';
+      ctx.fillStyle = 'rgba(245,165,55,0.55)';
+      ctx.fillText('COORDINATOR CLUSTER', W * 0.5, H * 0.5 + 30);
+      ctx.textAlign = 'left';
+    }
+
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+
+    window.addEventListener('load',   () => { resize(); loop(); });
+    window.addEventListener('resize', () => { resize(); });
+  })();
+
+  </script>
+</body>
+</html>
