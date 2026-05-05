@@ -610,6 +610,7 @@ const WALL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 ///   child only sees the explicit `env` map. PATH is not
 ///   inherited; the caller must include it if the executable
 ///   isn't an absolute path.
+#[allow(clippy::too_many_lines)]
 fn execute_native_step(
     step_index: u32,
     command: &[String],
@@ -675,12 +676,12 @@ fn execute_native_step(
     // return `None` and the step runs without those layers
     // (matches PR-1 semantics).
     let cgroup = StepCgroup::try_create(step_index, limits.memory_mb, limits.cpu_seconds);
-    if let Some(cg) = cgroup.as_ref() {
-        if let Err(e) = cg.attach(child.id()) {
-            tracing_workaround_warn(&format!(
-                "native step {step_index}: cgroup attach failed: {e}; step continues without cgroup enforcement"
-            ));
-        }
+    if let Some(cg) = cgroup.as_ref()
+        && let Err(e) = cg.attach(child.id())
+    {
+        tracing_workaround_warn(&format!(
+            "native step {step_index}: cgroup attach failed: {e}; step continues without cgroup enforcement"
+        ));
     }
 
     let stdout_pipe = child.stdout.take().expect("stdout piped");
@@ -1019,7 +1020,7 @@ fn read_capped<R: Read>(mut pipe: R, cap: usize) -> Vec<u8> {
     let mut total = 0_usize;
     loop {
         match pipe.read(&mut scratch) {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => {
                 if total < cap {
                     let take = (cap - total).min(n);
@@ -1027,7 +1028,6 @@ fn read_capped<R: Read>(mut pipe: R, cap: usize) -> Vec<u8> {
                 }
                 total = total.saturating_add(n);
             }
-            Err(_) => break,
         }
     }
     out
