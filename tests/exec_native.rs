@@ -29,14 +29,14 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use cosaci::jobs::{Limits, Pipeline, Step, StepStatus, execute_pipeline};
+use cosaci::jobs::{LimitKind, Limits, Pipeline, Step, StepStatus, execute_pipeline};
 
 fn echo_pipeline(args: &[&str]) -> Pipeline {
-    let mut argv: Vec<String> = vec!["/bin/echo".into()];
-    argv.extend(args.iter().map(|s| (*s).to_string()));
+    let mut cmd: Vec<String> = vec!["/bin/echo".into()];
+    cmd.extend(args.iter().map(|s| (*s).to_string()));
     Pipeline {
         steps: vec![Step::ExecNative {
-            command: argv,
+            command: cmd,
             env: BTreeMap::new(),
             limits: Limits::default(),
         }],
@@ -117,7 +117,6 @@ fn wall_timeout_kills_long_running_child() {
         elapsed.as_secs() < 4,
         "wall timeout didn't kill the child in time: {elapsed:?}"
     );
-    use cosaci::jobs::LimitKind;
     assert!(
         matches!(
             r.steps[0].status,
@@ -250,7 +249,6 @@ fn memory_oom_kill_attributed_to_limit_kind() {
             },
         }],
     };
-    use cosaci::jobs::LimitKind;
     let r = execute_pipeline(&p).expect("execute");
     assert!(
         matches!(
@@ -360,7 +358,6 @@ fn cpu_limit_kills_busy_loop() {
             },
         }],
     };
-    use cosaci::jobs::LimitKind;
     let start = Instant::now();
     let r = execute_pipeline(&p).expect("execute");
     let elapsed = start.elapsed();
