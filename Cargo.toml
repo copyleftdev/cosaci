@@ -104,7 +104,7 @@ sha2             = "0.11.0"
 wasmtime         = { version = "44.0.1", default-features = false, features = ["cranelift", "runtime", "wat"] }
 wat              = "1.247"
 criterion        = { version = "0.8.2", features = ["html_reports"] }
-hegeltest        = "0.8.1"
+hegeltest        = "0.12.3"
 rand             = "0.10.1"
 rand_chacha      = "0.10.0"
 signal-hook      = "0.4.4"
