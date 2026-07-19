@@ -1,5 +1,7 @@
 # CosaCI
 
+[![Tip my tokens](https://tokentip.to/badge/copyleftdev.svg?logo=1)](https://tokentip.to/@copyleftdev)
+
 [![CI](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/copyleftdev/cosaci/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
